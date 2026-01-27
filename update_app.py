@@ -207,10 +207,12 @@ def replace_with_extracted(archive_path, app_dir, exclude_patterns=None):
                 print(f"Warning: could not write {dest}: {e}", file=sys.stderr)
 
 
-def run_update(config, wait_pid=None, skip_version_check=False):
+def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=None):
     """
     Perform full update flow: optional wait for PID, version check, download,
     backup, replace, cleanup, restart. Raises on fatal errors.
+    restore_db_path: if set, the restarted app is launched with --db <path>
+    so it reopens on the same database (e.g. server DB) instead of the local one.
     """
     app_dir = config["_app_dir_resolved"]
     remote_version_url = config.get("remote_version_url")
@@ -283,12 +285,18 @@ def run_update(config, wait_pid=None, skip_version_check=False):
         app_exe = app_dir / app_executable
         if app_exe.exists():
             print("Restarting application...")
-            subprocess.Popen([str(app_exe)], cwd=str(app_dir), shell=False)
+            cmd = [str(app_exe)]
+            if restore_db_path:
+                cmd.extend(["--db", str(restore_db_path)])
+            subprocess.Popen(cmd, cwd=str(app_dir), shell=False)
         else:
             # Run as Python if no exe (developer mode)
             main_py = app_dir / "main.py"
             if main_py.exists():
-                subprocess.Popen([sys.executable, str(main_py)], cwd=str(app_dir), shell=False)
+                cmd = [sys.executable, str(main_py)]
+                if restore_db_path:
+                    cmd.extend(["--db", str(restore_db_path)])
+                subprocess.Popen(cmd, cwd=str(app_dir), shell=False)
 
     finally:
         if temp_dir.exists():
@@ -313,6 +321,8 @@ def _try_relaunch_elevated(args):
             params_list.extend(["--wait-pid", str(args.wait_pid)])
         if args.skip_version_check:
             params_list.append("--skip-version-check")
+        if getattr(args, "restore_db", None):
+            params_list.extend(["--restore-db", str(args.restore_db)])
         params = " ".join('"{}"'.format(p) if " " in str(p) else str(p) for p in params_list)
         exe = sys.executable if sys.executable else "python"
         ret = ctypes.windll.shell32.ShellExecuteW(
@@ -330,6 +340,7 @@ def main():
     parser.add_argument("--config", type=Path, help="Path to update_config.json")
     parser.add_argument("--wait-pid", type=int, metavar="PID", help="Wait for this process ID to exit before updating")
     parser.add_argument("--skip-version-check", action="store_true", help="Install package even if version is not newer")
+    parser.add_argument("--restore-db", type=str, metavar="PATH", help="Restart app with --db PATH so it reopens on the same database")
     parser.add_argument("--elevated", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
@@ -341,7 +352,12 @@ def main():
             except Exception:
                 pass
         config = load_config(args.config)
-        run_update(config, wait_pid=args.wait_pid, skip_version_check=args.skip_version_check)
+        run_update(
+            config,
+            wait_pid=args.wait_pid,
+            skip_version_check=args.skip_version_check,
+            restore_db_path=getattr(args, "restore_db", None),
+        )
     except Exception as e:
         print(f"Update failed: {e}", file=sys.stderr)
         if sys.platform == "win32":

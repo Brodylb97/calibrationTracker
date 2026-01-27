@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import csv
 from PyQt5 import QtWidgets, QtCore, QtGui
-from database import CalibrationRepository
+from database import CalibrationRepository, get_effective_db_path
 from lan_notify import send_due_reminders_via_lan
 
 
@@ -4604,7 +4604,11 @@ def run_gui(repo: CalibrationRepository):
     win = MainWindow(repo)
     try:
         from update_checker import install_update_check_into_main_window
-        install_update_check_into_main_window(win, check_on_startup=True)
+        install_update_check_into_main_window(
+            win,
+            check_on_startup=True,
+            get_db_path_for_restart=lambda: str(get_effective_db_path()),
+        )
     except Exception:
         pass
     win.showMaximized()

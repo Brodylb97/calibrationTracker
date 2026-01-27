@@ -218,10 +218,12 @@ def is_update_available(config=None):
     return remote_tup > local_tup, current, latest, None
 
 
-def trigger_update_script(wait_for_pid=None, config_path=None):
+def trigger_update_script(wait_for_pid=None, config_path=None, restore_db_path=None):
     """
     Start the external update script (update_app.py). Optionally pass the current
     process PID so the script waits for this process to exit before applying updates.
+    restore_db_path: if set, the updater will restart the app with --db <path> so it
+    reopens on the same database (e.g. server DB) instead of defaulting to local.
     Returns True if the script was started, False on error.
     When run from the frozen exe, sys.executable is the exe so we run Python with
     update_app.py if python is on PATH; otherwise "Update now" will not apply updates.
@@ -247,6 +249,8 @@ def trigger_update_script(wait_for_pid=None, config_path=None):
         cmd.extend(["--config", str(config_path)])
     if wait_for_pid is not None:
         cmd.extend(["--wait-pid", str(wait_for_pid)])
+    if restore_db_path:
+        cmd.extend(["--restore-db", str(restore_db_path)])
     try:
         creationflags = 0
         if sys.platform == "win32":
@@ -261,16 +265,18 @@ def trigger_update_script(wait_for_pid=None, config_path=None):
         return False
 
 
-def trigger_update_and_exit():
+def trigger_update_and_exit(restore_db_path=None):
     """
     Start the update script with --wait-pid <current pid>, then exit so the
     updater can replace files and restart the app. Call this when the user
     chooses "Update now" in the UI.
+    restore_db_path: if set, the restarted app will be launched with --db <path>
+    so it reopens on the same database (e.g. server DB) instead of the local one.
     When running the installed exe, Python must be on PATH to run the updater;
     otherwise the user can download the new installer from GitHub.
     """
     pid = os.getpid()
-    if trigger_update_script(wait_for_pid=pid):
+    if trigger_update_script(wait_for_pid=pid, restore_db_path=restore_db_path):
         sys.exit(0)
     if getattr(sys, "frozen", False):
         raise RuntimeError(
@@ -358,13 +364,17 @@ def check_for_updates_silent():
     return is_update_available()
 
 
-def install_update_check_into_main_window(main_window, *, check_on_startup=False):
+def install_update_check_into_main_window(main_window, *, check_on_startup=False, get_db_path_for_restart=None):
     """
     Add "Check for Updates" to the Help or File menu of the main window,
     and optionally run the update check once on startup.
+    get_db_path_for_restart: optional callable returning the DB path in use; when
+    provided, "Update now" will restart the app with that path so it reopens on
+    the same database (e.g. server DB) instead of the local one.
     Call this from run_gui() after creating the MainWindow, e.g.:
         win = MainWindow(repo)
-        install_update_check_into_main_window(win, check_on_startup=True)
+        install_update_check_into_main_window(win, check_on_startup=True,
+            get_db_path_for_restart=lambda: str(get_effective_db_path()))
         win.show()
     """
     try:
@@ -383,11 +393,14 @@ def install_update_check_into_main_window(main_window, *, check_on_startup=False
             break
     if help_menu is None:
         help_menu = menubar.addMenu("&Help")
+    def _on_update_now():
+        path = get_db_path_for_restart() if get_db_path_for_restart else None
+        trigger_update_and_exit(restore_db_path=path)
     act = QtWidgets.QAction("Check for Updates...", main_window)
-    act.triggered.connect(lambda: show_update_dialog(main_window))
+    act.triggered.connect(lambda: show_update_dialog(main_window, on_update_now=_on_update_now))
     help_menu.addAction(act)
     if check_on_startup:
         from PyQt5 import QtCore
         def do_startup_check():
-            show_update_dialog(main_window, show_current_message=False)
+            show_update_dialog(main_window, show_current_message=False, on_update_now=_on_update_now)
         QtCore.QTimer.singleShot(500, do_startup_check)
