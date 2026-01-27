@@ -37,6 +37,7 @@ py -m PyInstaller --name=CalibrationTracker ^
     --add-data "Signatures;Signatures" ^
     --hidden-import=PyQt5 ^
     --hidden-import=reportlab ^
+    --hidden-import=requests ^
     --hidden-import=PIL ^
     --hidden-import=PIL.Image ^
     --hidden-import=sqlite3 ^

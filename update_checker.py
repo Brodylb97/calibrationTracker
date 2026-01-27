@@ -71,10 +71,13 @@ def get_current_version(config=None):
         return None
 
 
-# Headers that avoid 404s from GitHub raw CDN when it treats some clients as bots
+# Headers that avoid 404s from GitHub raw CDN when it treats some clients as bots,
+# and reduce cached responses (Cache-Control/Pragma so updates appear after a new release).
 _VERSION_FETCH_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/plain,*/*",
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
 }
 
 
@@ -113,17 +116,29 @@ def get_latest_version_from_remote(config=None, timeout_seconds=15):
         return e == "404" or (e and "404" in str(e))
 
     def _try_github_api(owner, repo, branch, path):
-        """Fetch file via GitHub Contents API; often works when raw URL 404s (e.g. casing/CDN)."""
-        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={branch}"
+        """Fetch file via GitHub Contents API; often works when raw URL 404s (e.g. casing/CDN).
+        Uses requests if available, else urllib so it works in the frozen exe without bundling requests."""
+        import base64
+        import json as _json
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path or 'VERSION'}?ref={branch}"
         try:
             import requests
             r = requests.get(api_url, headers=_VERSION_FETCH_HEADERS, timeout=timeout_seconds)
             if r.status_code == 200:
                 data = r.json()
-                import base64
                 raw = base64.b64decode(data.get("content", "") or "").decode("utf-8", errors="replace").strip()
                 if raw:
                     return raw
+        except Exception:
+            pass
+        try:
+            from urllib.request import Request, urlopen
+            req = Request(api_url, headers=_VERSION_FETCH_HEADERS)
+            with urlopen(req, timeout=timeout_seconds) as resp:
+                data = _json.loads(resp.read().decode("utf-8", errors="replace"))
+            raw = base64.b64decode(data.get("content", "") or "").decode("utf-8", errors="replace").strip()
+            if raw:
+                return raw
         except Exception:
             pass
         return None
@@ -143,16 +158,20 @@ def get_latest_version_from_remote(config=None, timeout_seconds=15):
         return None
 
     try:
-        text, err = _fetch(url)
-        if not _is_404(err) and text is not None:
-            return text, None
-        # Fallbacks: derive owner/repo/branch/path from raw or jsDelivr URL
+        # When configured URL is raw GitHub, try API first (avoids cached raw CDN responses).
         owner = repo = branch = path = None
         if "raw.githubusercontent.com" in url:
             parts = url.replace("https://raw.githubusercontent.com/", "").split("/")
             if len(parts) >= 4:
                 owner, repo, branch, path = parts[0], parts[1], parts[2], "/".join(parts[3:])
-        elif "cdn.jsdelivr.net/gh/" in url:
+                text = _try_github_api(owner, repo, branch, path or "VERSION")
+                if text is not None:
+                    return text, None
+        text, err = _fetch(url)
+        if not _is_404(err) and text is not None:
+            return text, None
+        # Fallbacks: derive owner/repo/branch/path from raw or jsDelivr URL if not already
+        if owner is None and "cdn.jsdelivr.net/gh/" in url:
             # cdn.jsdelivr.net/gh/owner/repo@branch/path
             rest = url.split("cdn.jsdelivr.net/gh/", 1)[-1]
             if "@" in rest and "/" in rest:
@@ -229,10 +248,13 @@ def trigger_update_script(wait_for_pid=None, config_path=None):
     if wait_for_pid is not None:
         cmd.extend(["--wait-pid", str(wait_for_pid)])
     try:
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0x10)
         subprocess.Popen(
             cmd,
             cwd=str(app_dir),
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
+            creationflags=creationflags,
         )
         return True
     except Exception:

@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -86,15 +87,49 @@ def get_current_version(config):
         return f.read().strip()
 
 
+def _fetch_via_github_api(owner, repo, branch, path, timeout_seconds=15):
+    """Fetch file via GitHub Contents API (avoids cached raw CDN). Returns None on failure."""
+    import base64
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path or 'VERSION'}?ref={branch}"
+    headers = {"User-Agent": "CalibrationTracker-Updater/1.0", "Cache-Control": "no-cache", "Pragma": "no-cache"}
+    try:
+        if HAS_REQUESTS:
+            r = requests.get(api_url, headers=headers, timeout=timeout_seconds)
+            if r.status_code == 200:
+                data = r.json()
+                raw = base64.b64decode(data.get("content", "") or "").decode("utf-8", errors="replace").strip()
+                if raw:
+                    return raw
+        elif urlopen and Request:
+            req = Request(api_url, headers=headers)
+            with urlopen(req, timeout=timeout_seconds) as r:
+                data = json.loads(r.read().decode("utf-8", errors="replace"))
+            raw = base64.b64decode(data.get("content", "") or "").decode("utf-8", errors="replace").strip()
+            if raw:
+                return raw
+    except Exception:
+        pass
+    return None
+
+
 def fetch_remote_version(remote_version_url, timeout_seconds=15):
-    """Fetch latest version string from the given URL."""
+    """Fetch latest version string. Tries GitHub API first when URL is raw GitHub to avoid cache."""
+    owner = repo = branch = path = None
+    if "raw.githubusercontent.com" in (remote_version_url or ""):
+        parts = (remote_version_url or "").replace("https://raw.githubusercontent.com/", "").split("/")
+        if len(parts) >= 4:
+            owner, repo, branch, path = parts[0], parts[1], parts[2], "/".join(parts[3:])
+            text = _fetch_via_github_api(owner, repo, branch, path or "VERSION", timeout_seconds)
+            if text:
+                return text
+    headers = {"User-Agent": "CalibrationTracker-Updater/1.0", "Cache-Control": "no-cache", "Pragma": "no-cache"}
     if HAS_REQUESTS:
-        resp = requests.get(remote_version_url, timeout=timeout_seconds)
+        resp = requests.get(remote_version_url, headers=headers, timeout=timeout_seconds)
         resp.raise_for_status()
         return resp.text.strip()
     if urlopen is None:
         raise RuntimeError("Neither requests nor urllib available for HTTP.")
-    req = Request(remote_version_url, headers={"User-Agent": "CalibrationTracker-Updater/1.0"})
+    req = Request(remote_version_url, headers=headers)
     with urlopen(req, timeout=timeout_seconds) as r:
         return r.read().decode("utf-8", errors="replace").strip()
 
@@ -214,7 +249,10 @@ def run_update(config, wait_pid=None, skip_version_check=False):
     if not remote_package_url:
         raise ValueError("remote_package_url is required in config.")
 
-    temp_dir = Path(app_dir) / ".update_temp"
+    # Use user temp dir so we don't need write access to Program Files for download/extract
+    temp_base = Path(tempfile.gettempdir()) / "CalibrationTracker_update"
+    temp_base.mkdir(parents=True, exist_ok=True)
+    temp_dir = temp_base / f"{os.getpid()}_{int(time.time())}"
     temp_dir.mkdir(parents=True, exist_ok=True)
     zip_path = temp_dir / "update.zip"
 
@@ -223,7 +261,7 @@ def run_update(config, wait_pid=None, skip_version_check=False):
         download_file(remote_package_url, zip_path)
 
         print("Creating backup...")
-        backup_path = backup_app_directory(app_dir)
+        backup_path = backup_app_directory(app_dir, backup_parent_dir=Path(tempfile.gettempdir()))
 
         # Exclude db, logs, backups, and config from overwrite to avoid data loss
         replace_with_extracted(
@@ -257,18 +295,60 @@ def run_update(config, wait_pid=None, skip_version_check=False):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def _try_relaunch_elevated(args):
+    """On Windows, if app is in Program Files, re-launch this script as Administrator. Return True if we relaunched."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        config = load_config(args.config)
+        app_dir = config["_app_dir_resolved"]
+        app_dir_str = str(app_dir).lower()
+        if "program files" not in app_dir_str and "programfiles" not in app_dir_str.replace(" ", ""):
+            return False
+        # Need elevation to write to Program Files; re-launch with "runas"
+        script_path = os.path.normpath(os.path.abspath(__file__))
+        params_list = [script_path, "--config", str(args.config), "--elevated"]
+        if args.wait_pid is not None:
+            params_list.extend(["--wait-pid", str(args.wait_pid)])
+        if args.skip_version_check:
+            params_list.append("--skip-version-check")
+        params = " ".join('"{}"'.format(p) if " " in str(p) else str(p) for p in params_list)
+        exe = sys.executable if sys.executable else "python"
+        ret = ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", exe, params, str(app_dir), 1
+        )
+        if ret > 32:
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Calibration Tracker – automated update script")
     parser.add_argument("--config", type=Path, help="Path to update_config.json")
     parser.add_argument("--wait-pid", type=int, metavar="PID", help="Wait for this process ID to exit before updating")
     parser.add_argument("--skip-version-check", action="store_true", help="Install package even if version is not newer")
+    parser.add_argument("--elevated", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     try:
+        if sys.platform == "win32" and not getattr(args, "elevated", False):
+            try:
+                if _try_relaunch_elevated(args):
+                    sys.exit(0)
+            except Exception:
+                pass
         config = load_config(args.config)
         run_update(config, wait_pid=args.wait_pid, skip_version_check=args.skip_version_check)
     except Exception as e:
         print(f"Update failed: {e}", file=sys.stderr)
+        if sys.platform == "win32":
+            try:
+                input("Press Enter to close...")
+            except Exception:
+                pass
         sys.exit(1)
 
 

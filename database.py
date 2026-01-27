@@ -10,15 +10,14 @@ import shutil
 # Paths
 # -----------------------------------------------------------------------------
 
-# Shared DB path on the server
+# Default DB path: shared network location
 SERVER_DB_PATH = Path(
     r"Z:\Shared\Laboratory\Particulate Matter and Other Results\Brody's Project Junk\Cal Tracker\calibration.db"
 )
 
 def get_base_dir() -> Path:
     """
-    Base dir for local stuff (logs, etc.).
-    Not used for DB if SERVER_DB_PATH is set.
+    Base dir for the app (install dir when frozen, script dir when run from source).
     """
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
@@ -27,9 +26,20 @@ def get_base_dir() -> Path:
 
 BASE_DIR = get_base_dir()
 
-# Default DB is the server DB
+# Default is the server DB; if it can't be opened, get_connection() falls back to local
 DB_PATH = SERVER_DB_PATH
 ATTACHMENTS_DIR = DB_PATH.parent / "attachments"
+
+# When default (network) is unavailable, we use local; this is set by get_connection()
+_effective_db_path: Path | None = None
+
+def get_effective_db_path() -> Path:
+    """Path of the DB actually in use (local fallback path when network is unavailable)."""
+    return _effective_db_path if _effective_db_path is not None else DB_PATH
+
+def get_attachments_dir() -> Path:
+    """Attachments dir for the DB in use (matches get_effective_db_path())."""
+    return (BASE_DIR / "attachments") if _effective_db_path is not None else (DB_PATH.parent / "attachments")
 
 # -----------------------------------------------------------------------------
 # Connection helpers
@@ -38,12 +48,26 @@ ATTACHMENTS_DIR = DB_PATH.parent / "attachments"
 def get_connection(db_path: Path | None = None):
     """
     Get a database connection with optimized settings.
+    When db_path is None (default), tries DB_PATH (network) first; if that fails
+    with "unable to open database file", falls back to local calibration.db so
+    the app still runs when the network is unavailable.
     """
+    global _effective_db_path
     if db_path is None:
         db_path = DB_PATH
-    conn = sqlite3.connect(str(db_path), timeout=30.0)  # 30 second timeout for locked database
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=30.0)  # 30 second timeout for locked database
+    except sqlite3.OperationalError as e:
+        if "unable to open database file" in str(e) and db_path == DB_PATH:
+            fallback = BASE_DIR / "calibration.db"
+            _effective_db_path = fallback
+            conn = sqlite3.connect(str(fallback), timeout=30.0)
+        else:
+            raise
+    else:
+        if db_path == DB_PATH:
+            _effective_db_path = None  # using default (network) successfully
     conn.row_factory = sqlite3.Row
-    # Enable foreign keys
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
@@ -351,13 +375,13 @@ def initialize_db(conn: sqlite3.Connection):
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cal_values_record_field ON calibration_values(record_id, field_id)")
 
     conn.commit()
-    ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    get_attachments_dir().mkdir(parents=True, exist_ok=True)
     seed_default_instrument_types(conn)
     
     # Perform daily backup if needed (import here to avoid circular dependency)
     try:
         from database_backup import perform_daily_backup_if_needed
-        perform_daily_backup_if_needed(DB_PATH, max_backups=30)
+        perform_daily_backup_if_needed(get_effective_db_path(), max_backups=30)
     except ImportError:
         # database_backup module not available, skip backup
         pass
@@ -1137,7 +1161,7 @@ class CalibrationRepository:
         if not src.exists():
             raise FileNotFoundError(src_path)
 
-        dest_dir = ATTACHMENTS_DIR / str(instrument_id)
+        dest_dir = get_attachments_dir() / str(instrument_id)
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest_path = dest_dir / src.name
 

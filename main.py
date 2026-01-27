@@ -14,10 +14,6 @@ def main():
     # Install global hook so any uncaught exception is logged
     install_global_excepthook()
 
-    conn = get_connection()
-    initialize_db(conn)
-    repo = CalibrationRepository(conn)
-    
     parser = argparse.ArgumentParser(
         description="Calibration Tracker (GUI + LAN reminder mode)"
     )
@@ -30,7 +26,7 @@ def main():
         "--db",
         type=str,
         default=str(DB_PATH),
-        help="Path to SQLite database file (default: calibration.db)",
+        help="Path to SQLite database file (default: local calibration.db in app dir)",
     )
 
     args = parser.parse_args()
