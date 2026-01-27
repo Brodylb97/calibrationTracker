@@ -3787,18 +3787,24 @@ class MainWindow(QtWidgets.QMainWindow):
         # Update status bar when selection changes
         self.table.selectionModel().selectionChanged.connect(self._update_status_bar)
 
+    def _update_window_title(self):
+        """Set window title to show app version (from VERSION / update checker)."""
+        try:
+            from update_checker import get_current_version
+            ver = get_current_version()
+            if ver:
+                self.setWindowTitle(f"Calibration Tracker - v{ver}")
+                return
+        except Exception:
+            pass
+        self.setWindowTitle("Calibration Tracker")
+
     def load_instruments(self):
         instruments = self.repo.list_instruments()
         self.model.set_instruments(instruments)
         count = len(instruments)
-        
-        # Update window title with count
-        filtered_count = self.proxy.rowCount()
-        if filtered_count == count:
-            self.setWindowTitle(f"Calibration Tracker - {count} instrument(s)")
-        else:
-            self.setWindowTitle(f"Calibration Tracker - {filtered_count} of {count} instrument(s)")
-        
+
+        self._update_window_title()
         self.statusBar().showMessage(f"Loaded {count} instrument(s)", 3000)
         self._update_statistics()
     
@@ -4051,15 +4057,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.proxy.set_status_filter(self.status_filter_combo.currentData() or "")
         self.proxy.set_type_filter(self.type_filter_combo.currentData() or "")
         self.proxy.set_due_filter(self.due_filter_combo.currentText())
-        
-        # Update window title with filtered count
-        filtered_count = self.proxy.rowCount()
-        total_count = self.model.rowCount()
-        if filtered_count == total_count:
-            self.setWindowTitle(f"Calibration Tracker - {total_count} instrument(s)")
-        else:
-            self.setWindowTitle(f"Calibration Tracker - {filtered_count} of {total_count} instrument(s)")
-        
+
+        self._update_window_title()
         self._update_statistics()
 
     def on_export_csv(self):
