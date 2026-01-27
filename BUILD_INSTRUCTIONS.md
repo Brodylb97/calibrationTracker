@@ -29,12 +29,15 @@ build_distribution.bat
 
 This will create a `dist\CalibrationTracker` folder containing:
 - All Python source files (including database_backup.py for automatic backups)
+- **Update checker files**: update_app.py, update_checker.py, update_config.json, update_config.example.json, VERSION
 - Signatures folder (if it exists)
 - requirements.txt
 - USER_GUIDE.md
 - README.txt
 
 **Note:** The new `database_backup.py` module provides automatic daily database backups. Backups are stored in a `backups/` folder next to the database file.
+
+**Note:** The update checker (Help → Check for Updates) uses update_config.json and VERSION. These are installed by the Inno Setup installer so in-app update checks work.
 
 ## Step 3: Build the Executable
 
@@ -133,6 +136,8 @@ Before distributing the installer:
 - [ ] Application icon is set (if available)
 - [ ] Version information is correct
 - [ ] Publisher information is correct
+- [ ] Update checker files (update_app.py, update_checker.py, update_config.json, VERSION) are included in installer
+- [ ] Help → Check for Updates works (uses VERSION and update_config.json from install dir)
 
 ## New Features in This Version
 
@@ -167,6 +172,7 @@ Before distributing the installer:
    ```
    Source: "path\to\file"; DestDir: "{app}"; Flags: ignoreversion
    ```
+   The installer already includes update checker files: update_app.py, update_checker.py, update_config.json, update_config.example.json, VERSION.
 
 ### Network Database Setup
 If using a network database, modify `database.py` before building to set the correct network path.

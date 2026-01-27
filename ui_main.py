@@ -2,12 +2,22 @@
 
 from datetime import datetime, date
 import os
+import sys
 from pathlib import Path
 import tempfile
 import csv
 from PyQt5 import QtWidgets, QtCore, QtGui
 from database import CalibrationRepository
 from lan_notify import send_due_reminders_via_lan
+
+
+def _app_icon_path():
+    """Path to cal_tracker.ico for window/taskbar icon. Works when run as script or frozen exe."""
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).resolve().parent
+    else:
+        base = Path(__file__).resolve().parent
+    return base / "cal_tracker.ico"
 
 
 class HighlightDelegate(QtWidgets.QStyledItemDelegate):
@@ -3516,6 +3526,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.repo = repo
         self.setWindowTitle("Calibration Tracker")
         self.resize(1000, 600)
+        icon_path = _app_icon_path()
+        if icon_path.is_file():
+            self.setWindowIcon(QtGui.QIcon(str(icon_path)))
 
         self._init_ui()
         self.load_instruments()
@@ -4585,6 +4598,9 @@ def run_gui(repo: CalibrationRepository):
     app = QtWidgets.QApplication([])
     app.setOrganizationName("CalibrationTracker")
     app.setApplicationName("CalibrationTracker")
+    icon_path = _app_icon_path()
+    if icon_path.is_file():
+        app.setWindowIcon(QtGui.QIcon(str(icon_path)))
     apply_global_style(app)
     win = MainWindow(repo)
     try:

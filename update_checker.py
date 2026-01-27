@@ -13,13 +13,22 @@ import sys
 from pathlib import Path
 
 # Reuse config/version logic from update_app without circular imports
-SCRIPT_DIR = Path(__file__).resolve().parent
 CONFIG_PATH_ENV = "CALIBRATION_TRACKER_UPDATE_CONFIG"
-DEFAULT_CONFIG_PATH = SCRIPT_DIR / "update_config.json"
+
+
+def _app_base_dir():
+    """Directory containing the app (install dir when frozen, script dir when run from source)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def _default_config_path():
+    return _app_base_dir() / "update_config.json"
 
 
 def _load_config(config_path=None):
-    path = config_path or os.environ.get(CONFIG_PATH_ENV) or DEFAULT_CONFIG_PATH
+    path = config_path or os.environ.get(CONFIG_PATH_ENV) or _default_config_path()
     path = Path(path)
     if not path.is_file():
         return None
@@ -188,13 +197,26 @@ def trigger_update_script(wait_for_pid=None, config_path=None):
     Start the external update script (update_app.py). Optionally pass the current
     process PID so the script waits for this process to exit before applying updates.
     Returns True if the script was started, False on error.
+    When run from the frozen exe, sys.executable is the exe so we run Python with
+    update_app.py if python is on PATH; otherwise "Update now" will not apply updates.
     """
-    app_dir = SCRIPT_DIR
-    config_path = Path(config_path or os.environ.get(CONFIG_PATH_ENV) or DEFAULT_CONFIG_PATH)
+    app_dir = _app_base_dir()
+    config_path = Path(config_path or os.environ.get(CONFIG_PATH_ENV) or _default_config_path())
     updater_script = app_dir / "update_app.py"
     if not updater_script.is_file():
         return False
-    cmd = [sys.executable, str(updater_script)]
+    # When frozen: must run "python update_app.py" (Python on PATH); when from source: sys.executable is python
+    if getattr(sys, "frozen", False):
+        try:
+            import shutil
+            python_exe = shutil.which("python") or shutil.which("python3")
+        except Exception:
+            python_exe = None
+        if not python_exe:
+            return False  # "Update now" requires Python on PATH when running the installed exe
+        cmd = [python_exe, str(updater_script)]
+    else:
+        cmd = [sys.executable, str(updater_script)]
     if config_path.is_file():
         cmd.extend(["--config", str(config_path)])
     if wait_for_pid is not None:
@@ -215,10 +237,18 @@ def trigger_update_and_exit():
     Start the update script with --wait-pid <current pid>, then exit so the
     updater can replace files and restart the app. Call this when the user
     chooses "Update now" in the UI.
+    When running the installed exe, Python must be on PATH to run the updater;
+    otherwise the user can download the new installer from GitHub.
     """
     pid = os.getpid()
     if trigger_update_script(wait_for_pid=pid):
         sys.exit(0)
+    if getattr(sys, "frozen", False):
+        raise RuntimeError(
+            "Could not start update script. When using the installed app, "
+            "Python must be on PATH to run updates. Alternatively download the "
+            "new installer from GitHub and run it."
+        )
     raise RuntimeError("Could not start update script.")
 
 
