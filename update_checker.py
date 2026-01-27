@@ -277,6 +277,8 @@ def _create_restart_task(exe_path, db_path, delay_seconds=30):
     chooses "Update now" and we use --no-restart so the updater does not start
     the app. Avoids the elevated updater creating a task that never runs or runs
     in session 0.
+    Do not use /ru – the task runs as the creating user when /ru is omitted,
+    which is more reliable for "run when user is logged on".
     """
     if sys.platform != "win32":
         return False
@@ -286,6 +288,7 @@ def _create_restart_task(exe_path, db_path, delay_seconds=30):
     run_at = datetime.now() + timedelta(seconds=delay_seconds)
     st = run_at.strftime("%H:%M")
     sd = run_at.strftime("%Y-%m-%d")
+    # /tr is the full command line; quoted exe and quoted arg value so spaces are safe
     tr = f'"{exe_path}" --db "{db_path}"'
     args = [
         "schtasks", "/create",
@@ -294,13 +297,7 @@ def _create_restart_task(exe_path, db_path, delay_seconds=30):
         "/sc", "once", "/st", st, "/sd", sd,
         "/f",
     ]
-    # Run as current user so task runs in interactive session when user is logged on
-    try:
-        ru = os.environ.get("USERNAME") or os.getlogin()
-        if ru:
-            args.extend(["/ru", ru])
-    except OSError:
-        pass
+    # Omit /ru so the task runs as the user who created it, in the same session
     try:
         subprocess.run(
             args,
@@ -368,7 +365,12 @@ def show_update_dialog(parent_widget=None, on_update_now=None, on_later=None, *,
         return False
 
     title = "Update Available"
-    msg = f"A new version is available.\n\nCurrent: {current or 'Unknown'}\nLatest:  {latest}\n\nUpdate now? The application will close and the updater will run."
+    msg = (
+        f"A new version is available.\n\nCurrent: {current or 'Unknown'}\nLatest:  {latest}\n\n"
+        "Update now? The application will close and the updater will run.\n\n"
+        "If the app does not reopen, start it from the Start menu or desktop shortcut; "
+        "it will reconnect to your last-used database."
+    )
     choice = _show_yes_no(parent_widget, title, msg)
     if choice == "yes":
         if on_update_now is None:

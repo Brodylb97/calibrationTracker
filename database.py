@@ -1,5 +1,6 @@
 # database.py
 
+import os
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -9,6 +10,42 @@ import shutil
 # -----------------------------------------------------------------------------
 # Paths
 # -----------------------------------------------------------------------------
+
+def _last_db_file() -> Path:
+    """Path to the file storing the last-used DB path (for restart / manual launch)."""
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA", "")
+        if not base:
+            base = Path.home() / "AppData" / "Roaming"
+        else:
+            base = Path(base)
+    else:
+        base = Path.home() / ".config"
+    return base / "CalibrationTracker" / "last_db.txt"
+
+
+def get_persisted_last_db_path() -> Path | None:
+    """Read last-used DB path from %APPDATA%\\CalibrationTracker\\last_db.txt (or ~/.config on non-Windows). Returns None if missing or invalid."""
+    p = _last_db_file()
+    if not p.is_file():
+        return None
+    try:
+        raw = p.read_text(encoding="utf-8").strip()
+        if not raw:
+            return None
+        return Path(raw)
+    except Exception:
+        return None
+
+
+def persist_last_db_path(path: Path) -> None:
+    """Write the given DB path so the next launch can use it as default (e.g. after an update)."""
+    p = _last_db_file()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(str(path.resolve()), encoding="utf-8")
+    except Exception:
+        pass
 
 # Default DB path: shared network location
 SERVER_DB_PATH = Path(

@@ -4,7 +4,15 @@ import argparse
 import sys
 from pathlib import Path
 
-from database import get_connection, initialize_db, DB_PATH, CalibrationRepository
+from database import (
+    get_connection,
+    initialize_db,
+    DB_PATH,
+    CalibrationRepository,
+    get_effective_db_path,
+    get_persisted_last_db_path,
+    persist_last_db_path,
+)
 from ui_main import run_gui
 from crash_log import install_global_excepthook, logger, log_current_exception
 from lan_notify import send_due_reminders_via_lan
@@ -25,18 +33,19 @@ def main():
     parser.add_argument(
         "--db",
         type=str,
-        default=str(DB_PATH),
-        help="Path to SQLite database file (default: local calibration.db in app dir)",
+        default=None,
+        help="Path to SQLite database (default: last used, or server path)",
     )
 
     args = parser.parse_args()
-    db_path = Path(args.db)
+    db_path = Path(args.db) if args.db else (get_persisted_last_db_path() or DB_PATH)
 
     # Log startup info
     logger.info("Program start. args=%s db=%s", sys.argv, db_path)
 
     try:
         conn = get_connection(db_path)
+        persist_last_db_path(get_effective_db_path())  # so manual start after update uses same DB
         initialize_db(conn)  # This now includes daily backup check
         repo = CalibrationRepository(conn)
 
