@@ -15,7 +15,6 @@ import sys
 import tempfile
 import time
 import zipfile
-from datetime import datetime, timedelta
 from pathlib import Path
 
 # Optional: use requests if available for downloads; otherwise urllib
@@ -208,42 +207,6 @@ def replace_with_extracted(archive_path, app_dir, exclude_patterns=None):
                 print(f"Warning: could not write {dest}: {e}", file=sys.stderr)
 
 
-def _schedule_restart_via_task(app_dir, app_exe_path, db_path, delay_seconds=30):
-    """
-    On Windows, create a one-time scheduled task that runs the exe with --db
-    in the user's session after delay_seconds. Avoids batch/cmd process hierarchy
-    that can cause "Failed to load Python DLL" when the exe is started from a
-    hidden detached batch.
-    """
-    if sys.platform != "win32":
-        return False
-    app_exe_path = str(Path(app_exe_path).resolve())
-    db_path = str(db_path)
-    app_dir = str(Path(app_dir).resolve())
-    run_at = datetime.now() + timedelta(seconds=delay_seconds)
-    st = run_at.strftime("%H:%M")
-    sd = run_at.strftime("%Y-%m-%d")
-    # /tr: command; exe and args must be quoted if they contain spaces
-    tr = f'"{app_exe_path}" --db "{db_path}"'
-    try:
-        subprocess.run(
-            [
-                "schtasks", "/create",
-                "/tn", "CalTrackerPostUpdate",
-                "/tr", tr,
-                "/sc", "once", "/st", st, "/sd", sd,
-                "/f",
-            ],
-            check=True,
-            capture_output=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
-            cwd=app_dir,
-        )
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
-        return False
-
-
 def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=None, no_restart=False):
     """
     Perform full update flow: optional wait for PID, version check, download,
@@ -337,15 +300,8 @@ def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=
                         cmd.extend(["--db", str(restore_db_path)])
                     subprocess.Popen(cmd, cwd=str(app_dir), shell=False)
         else:
-            # App asked us not to restart (it would have scheduled a batch; we use Task Scheduler instead so the exe runs in a normal user-session context and avoids "Failed to load Python DLL" from batch/cmd hierarchy)
-            if restore_db_path and sys.platform == "win32":
-                app_exe = app_dir / app_executable
-                if app_exe.exists() and _schedule_restart_via_task(app_dir, app_exe, restore_db_path):
-                    print("Restart scheduled via Task Scheduler (user session).")
-                else:
-                    print("Restart was scheduled by the application (user session).")
-            else:
-                print("Restart was scheduled by the application (user session).")
+            # App created the restart task from user session before starting us (we may run elevated); we do nothing here
+            print("Restart was scheduled by the application (user session).")
 
     finally:
         if temp_dir.exists():

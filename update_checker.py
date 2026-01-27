@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Reuse config/version logic from update_app without circular imports
@@ -269,6 +270,50 @@ def trigger_update_script(wait_for_pid=None, config_path=None, restore_db_path=N
         return False
 
 
+def _create_restart_task(exe_path, db_path, delay_seconds=30):
+    """
+    On Windows, create a one-time scheduled task from this (user) process so the
+    task runs in the interactive user session. Called before exit when the user
+    chooses "Update now" and we use --no-restart so the updater does not start
+    the app. Avoids the elevated updater creating a task that never runs or runs
+    in session 0.
+    """
+    if sys.platform != "win32":
+        return False
+    exe_path = str(Path(exe_path).resolve())
+    app_dir = str(Path(exe_path).parent)
+    db_path = str(db_path)
+    run_at = datetime.now() + timedelta(seconds=delay_seconds)
+    st = run_at.strftime("%H:%M")
+    sd = run_at.strftime("%Y-%m-%d")
+    tr = f'"{exe_path}" --db "{db_path}"'
+    args = [
+        "schtasks", "/create",
+        "/tn", "CalTrackerPostUpdate",
+        "/tr", tr,
+        "/sc", "once", "/st", st, "/sd", sd,
+        "/f",
+    ]
+    # Run as current user so task runs in interactive session when user is logged on
+    try:
+        ru = os.environ.get("USERNAME") or os.getlogin()
+        if ru:
+            args.extend(["/ru", ru])
+    except OSError:
+        pass
+    try:
+        subprocess.run(
+            args,
+            check=True,
+            capture_output=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+            cwd=app_dir,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return False
+
+
 def trigger_update_and_exit(restore_db_path=None):
     """
     Start the update script with --wait-pid <current pid>, then exit so the
@@ -276,15 +321,16 @@ def trigger_update_and_exit(restore_db_path=None):
     chooses "Update now" in the UI.
     restore_db_path: if set, the restarted app will be launched with --db <path>
     so it reopens on the same database (e.g. server DB) instead of the local one.
-    When running the installed exe, we schedule the restart from this (user) session
-    so the restarted app sees the same drive mappings (e.g. Z:); the updater is
-    told not to restart (--no-restart).
+    When running the installed exe, we create the restart task from this (user)
+    session before starting the updater, so the task runs in the interactive
+    session; the updater is told not to restart (--no-restart).
     When running the installed exe, Python must be on PATH to run the updater;
     otherwise the user can download the new installer from GitHub.
     """
     pid = os.getpid()
     if restore_db_path and getattr(sys, "frozen", False):
-        # Installed exe: updater may run elevated and lose Z:; tell updater to schedule restart via Task Scheduler (avoids batch/cmd hierarchy that can cause "Failed to load Python DLL")
+        # Create task from user session so it runs in interactive session (elevated updater's task never ran)
+        _create_restart_task(sys.executable, restore_db_path)
         if trigger_update_script(
             wait_for_pid=pid, restore_db_path=restore_db_path, no_restart=True
         ):
