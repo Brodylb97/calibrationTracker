@@ -270,26 +270,47 @@ def trigger_update_script(wait_for_pid=None, config_path=None, restore_db_path=N
         return False
 
 
-def _create_restart_task(exe_path, db_path, delay_seconds=30):
+def _restart_params_path():
+    """Path to the file used by RestartHelper.exe: exe_path and db_path, one per line."""
+    if sys.platform != "win32":
+        return None
+    apd = os.environ.get("APPDATA")
+    if not apd:
+        return None
+    return Path(apd) / "CalibrationTracker" / "restart_params.txt"
+
+
+def _write_restart_params(exe_path, db_path):
+    """Write exe path and db path for RestartHelper.exe. Returns True on success."""
+    path = _restart_params_path()
+    if not path:
+        return False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{exe_path}\n{db_path}\n", encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+def _create_restart_task_stub(stub_exe_path, delay_seconds=30):
     """
-    On Windows, create a one-time scheduled task from this (user) process so the
-    task runs in the interactive user session. Called before exit when the user
-    chooses "Update now" and we use --no-restart so the updater does not start
-    the app. Avoids the elevated updater creating a task that never runs or runs
-    in session 0.
-    Do not use /ru – the task runs as the creating user when /ru is omitted,
-    which is more reliable for "run when user is logged on".
+    On Windows, create a one-time scheduled task that runs RestartHelper.exe.
+    The stub reads exe path and --db from %APPDATA%\\CalibrationTracker\\restart_params.txt
+    and launches the main app with correct working directory. Called from the (user)
+    process before starting the updater with --no-restart.
     """
     if sys.platform != "win32":
         return False
-    exe_path = str(Path(exe_path).resolve())
-    app_dir = str(Path(exe_path).parent)
-    db_path = str(db_path)
+    stub_exe_path = Path(stub_exe_path).resolve()
+    if not stub_exe_path.is_file():
+        return False
+    stub_str = str(stub_exe_path)
+    app_dir = str(stub_exe_path.parent)
     run_at = datetime.now() + timedelta(seconds=delay_seconds)
     st = run_at.strftime("%H:%M")
     sd = run_at.strftime("%Y-%m-%d")
-    # /tr is the full command line; quoted exe and quoted arg value so spaces are safe
-    tr = f'"{exe_path}" --db "{db_path}"'
+    tr = f'"{stub_str}"'
     args = [
         "schtasks", "/create",
         "/tn", "CalTrackerPostUpdate",
@@ -297,7 +318,6 @@ def _create_restart_task(exe_path, db_path, delay_seconds=30):
         "/sc", "once", "/st", st, "/sd", sd,
         "/f",
     ]
-    # Omit /ru so the task runs as the user who created it, in the same session
     try:
         subprocess.run(
             args,
@@ -318,16 +338,25 @@ def trigger_update_and_exit(restore_db_path=None):
     chooses "Update now" in the UI.
     restore_db_path: if set, the restarted app will be launched with --db <path>
     so it reopens on the same database (e.g. server DB) instead of the local one.
-    When running the installed exe, we create the restart task from this (user)
-    session before starting the updater, so the task runs in the interactive
-    session; the updater is told not to restart (--no-restart).
+    When running the installed exe, we write restart params and create a task
+    that runs RestartHelper.exe (stub); the stub reads params and launches the
+    main exe with --db and correct working directory. The updater is told
+    --no-restart. If RestartHelper.exe is missing, no task is created and the
+    user relies on manual start + last-DB persistence.
     When running the installed exe, Python must be on PATH to run the updater;
     otherwise the user can download the new installer from GitHub.
     """
     pid = os.getpid()
     if restore_db_path and getattr(sys, "frozen", False):
-        # Create task from user session so it runs in interactive session (elevated updater's task never ran)
-        _create_restart_task(sys.executable, restore_db_path)
+        app_dir = _app_base_dir()
+        stub = app_dir / "RestartHelper.exe"
+        if _write_restart_params(str(Path(sys.executable).resolve()), str(restore_db_path)):
+            if stub.is_file() and _create_restart_task_stub(stub):
+                if trigger_update_script(
+                    wait_for_pid=pid, restore_db_path=restore_db_path, no_restart=True
+                ):
+                    sys.exit(0)
+        # Stub missing or params/task failed: still run updater with no_restart; user starts manually
         if trigger_update_script(
             wait_for_pid=pid, restore_db_path=restore_db_path, no_restart=True
         ):

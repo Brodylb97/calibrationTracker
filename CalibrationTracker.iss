@@ -46,6 +46,8 @@ Name: "quicklaunchicon"; Description: "{cm:CreateQuickLaunchIcon}"; GroupDescrip
 [Files]
 ; Main executable
 Source: "dist\CalibrationTracker.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Stub used to reopen the app after an update (task runs this; it reads params and launches main exe)
+Source: "dist\RestartHelper.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Signatures folder
 Source: "Signatures\*"; DestDir: "{app}\Signatures"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Logo file for PDF exports
