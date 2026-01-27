@@ -112,15 +112,8 @@ def get_latest_version_from_remote(config=None, timeout_seconds=15):
     def _is_404(e):
         return e == "404" or (e and "404" in str(e))
 
-    def _try_github_fallbacks(owner, repo, branch, path):
-        # Try jsDelivr, then raw, then API
-        for u in [
-            f"https://cdn.jsdelivr.net/gh/{owner}/{repo}@{branch}/{path}",
-            f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}",
-        ]:
-            t, e = _fetch(u)
-            if t is not None:
-                return t
+    def _try_github_api(owner, repo, branch, path):
+        """Fetch file via GitHub Contents API; often works when raw URL 404s (e.g. casing/CDN)."""
         api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={branch}"
         try:
             import requests
@@ -133,6 +126,20 @@ def get_latest_version_from_remote(config=None, timeout_seconds=15):
                     return raw
         except Exception:
             pass
+        return None
+
+    def _try_github_fallbacks(owner, repo, branch, path):
+        # Prefer GitHub API first (avoids raw CDN 404s); then jsDelivr; then raw again
+        t = _try_github_api(owner, repo, branch, path or "VERSION")
+        if t is not None:
+            return t
+        for u in [
+            f"https://cdn.jsdelivr.net/gh/{owner}/{repo}@{branch}/{path or 'VERSION'}",
+            f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path or 'VERSION'}",
+        ]:
+            t, e = _fetch(u)
+            if t is not None:
+                return t
         return None
 
     try:
@@ -252,12 +259,14 @@ def trigger_update_and_exit():
     raise RuntimeError("Could not start update script.")
 
 
-def show_update_dialog(parent_widget=None, on_update_now=None, on_later=None):
+def show_update_dialog(parent_widget=None, on_update_now=None, on_later=None, *, show_current_message=True):
     """
     Check for updates and, if available, show a prompt. Runs on the calling thread.
     - parent_widget: Qt widget for dialog parent (optional).
     - on_update_now: callable to run when user chooses "Update now" (default: trigger_update_and_exit).
     - on_later: callable when user chooses "Later" (optional).
+    - show_current_message: if True, show "You're already on the latest version" when current; if False,
+      show nothing when current (use False for automatic startup checks).
 
     Uses PyQt5 if available; otherwise logs or prints. Returns True if an update
     was available and the user was prompted, False otherwise.
@@ -266,6 +275,9 @@ def show_update_dialog(parent_widget=None, on_update_now=None, on_later=None):
     if not available:
         if error and parent_widget:
             _show_message(parent_widget, "Check for Updates", f"Could not check for updates: {error}", is_error=False)
+        elif show_current_message and parent_widget:
+            msg = f"You're already on the latest version ({current or 'Unknown'})."
+            _show_message(parent_widget, "Check for Updates", msg, is_error=False)
         return False
 
     title = "Update Available"
@@ -355,5 +367,5 @@ def install_update_check_into_main_window(main_window, *, check_on_startup=False
     if check_on_startup:
         from PyQt5 import QtCore
         def do_startup_check():
-            show_update_dialog(main_window)
+            show_update_dialog(main_window, show_current_message=False)
         QtCore.QTimer.singleShot(500, do_startup_check)

@@ -13,35 +13,16 @@ This document provides step-by-step instructions for creating a distribution pac
 1. Open a command prompt in the project directory
 2. Install Python dependencies:
    ```batch
-   pip install -r requirements.txt
+   py -m pip install -r requirements.txt
    ```
 3. Install PyInstaller (if not already installed):
    ```batch
-   pip install pyinstaller
+   py -m pip install pyinstaller
    ```
 
-## Step 2: Build the Distribution Package
+## Step 2: Build the Executable (for installer)
 
-Run the distribution build script:
-```batch
-build_distribution.bat
-```
-
-This will create a `dist\CalibrationTracker` folder containing:
-- All Python source files (including database_backup.py for automatic backups)
-- **Update checker files**: update_app.py, update_checker.py, update_config.json, update_config.example.json, VERSION
-- Signatures folder (if it exists)
-- requirements.txt
-- USER_GUIDE.md
-- README.txt
-
-**Note:** The new `database_backup.py` module provides automatic daily database backups. Backups are stored in a `backups/` folder next to the database file.
-
-**Note:** The update checker (Help → Check for Updates) uses update_config.json and VERSION. These are installed by the Inno Setup installer so in-app update checks work.
-
-## Step 3: Build the Executable
-
-Run the executable build script:
+Run the executable build script (uses `py` and PyInstaller):
 ```batch
 build_executable.bat
 ```
@@ -54,7 +35,47 @@ This will:
 
 **Note:** The first build may take several minutes. Subsequent builds are faster.
 
-## Step 4: Test the Executable
+**Optional – build exe and installer in one go:**
+```batch
+build_installer.bat
+```
+This runs `build_executable.bat` then compiles `CalibrationTracker.iss` with Inno Setup (if ISCC is on PATH or in the default Inno install). Otherwise it reminds you to compile the .iss file manually.
+
+## Step 3: Build the Distribution Package (optional, for source bundle)
+
+To create a source distribution folder (e.g. for archives or running from source), run:
+```batch
+build_distribution.bat
+```
+
+This creates a `dist\CalibrationTracker` folder containing:
+- All Python source files (including database_backup.py for automatic backups)
+- **Update checker files**: update_app.py, update_checker.py, update_config.json, update_config.example.json, VERSION
+- Signatures folder, requirements.txt, USER_GUIDE.md, BUILD_INSTRUCTIONS.md, README.txt
+
+**Note:** For the Windows installer you do **not** need to run build_distribution; run `build_executable.bat` then Inno Setup. The installer packs the exe from `dist\` and other files from the project root.
+
+**Note:** The update checker (Help → Check for Updates) uses update_config.json and VERSION. These are installed by the Inno Setup installer so in-app update checks work.
+
+## Step 4: Create the Installer with Inno Setup
+
+1. **Install Inno Setup** (if not already installed)  
+   - Download from: https://jrsoftware.org/isdl.php  
+   - Run the installer  
+
+2. **Build the installer** (either method):
+   - **Option A:** Run `build_installer.bat` (builds exe then compiles the .iss if ISCC is available), or  
+   - **Option B:** Build the exe with `build_executable.bat`, then open Inno Setup Compiler, open `CalibrationTracker.iss`, and use Build → Compile (F9).
+
+3. **Output:** The installer is created in the `installer` folder as `installer\CalibrationTracker_Setup.exe`.
+
+4. **Customize the script** (optional) before compiling:
+   - Update `MyAppPublisher` with your company name
+   - Update `MyAppURL` with your website
+   - Update `MyAppId` with a unique GUID (Tools → Generate GUID in Inno)
+   - Keep `MyAppVersion` in CalibrationTracker.iss in sync with the `VERSION` file
+
+## Step 5: Test the Executable
 
 Before creating the installer, test the executable:
 1. Navigate to the `dist` folder
@@ -65,28 +86,6 @@ Before creating the installer, test the executable:
    - Signatures folder is accessible
    - PDF export works
    - All dialogs function properly
-
-## Step 5: Create the Installer with Inno Setup
-
-1. **Install Inno Setup** (if not already installed)
-   - Download from: https://jrsoftware.org/isdl.php
-   - Run the installer
-
-2. **Open the Inno Setup Script**
-   - Launch Inno Setup Compiler
-   - Open `CalibrationTracker.iss`
-
-3. **Customize the Script** (optional):
-   - Update `MyAppPublisher` with your company name
-   - Update `MyAppURL` with your website
-   - Update `MyAppId` with a unique GUID (use Tools > Generate GUID)
-   - Add a license file path if you have one
-   - Add an icon file path if you have one
-
-4. **Build the Installer**
-   - Click "Build" > "Compile" (or press F9)
-   - The installer will be created in the `installer` folder
-   - The output file will be: `installer\CalibrationTracker_Setup.exe`
 
 ## Step 6: Test the Installer
 

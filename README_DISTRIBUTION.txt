@@ -6,31 +6,35 @@ This package contains everything needed to build and distribute the Calibration 
 QUICK START
 -----------
 1. Install Python 3.8+ and dependencies:
-   pip install -r requirements.txt
+   py -m pip install -r requirements.txt
 
 2. Build executable:
    build_executable.bat
 
 3. Create installer:
    - Install Inno Setup from https://jrsoftware.org/isdl.php
-   - Open CalibrationTracker.iss in Inno Setup
-   - Build > Compile (F9)
+   - Open CalibrationTracker.iss in Inno Setup and use Build > Compile (F9)
+   - Or run build_installer.bat to build the exe and compile the installer in one go (if ISCC is on PATH or in default install)
 
 FILES INCLUDED
 --------------
-- *.py                    : Python source files (including database_backup.py)
-- requirements.txt         : Python dependencies
-- build_executable.bat     : Script to build standalone executable
-- build_distribution.bat   : Script to create distribution folder
-- CalibrationTracker.iss   : Inno Setup installer script
-- BUILD_INSTRUCTIONS.md    : Detailed build instructions
-- USER_GUIDE.md           : User documentation
+- *.py                    : Python source files (including database_backup.py, update_checker.py, update_app.py)
+- requirements.txt       : Python dependencies
+- build_executable.bat    : Script to build standalone executable (uses py)
+- build_distribution.bat  : Script to create source distribution folder
+- build_installer.bat    : Script to build exe then compile Inno installer in one go
+- CalibrationTracker.iss : Inno Setup installer script
+- BUILD_INSTRUCTIONS.md  : Detailed build instructions
+- USER_GUIDE.md          : User documentation
+- update_config.json     : Update checker config (remote version URL, etc.)
+- VERSION                : Current version (used by Help > Check for Updates)
 
-NEW FEATURES
-------------
-- database_backup.py      : Automatic daily database backup system
-- Optimized database schema with indexes for better performance
-- Automatic backup cleanup (keeps last 30 days)
+FEATURES
+--------
+- Instrument and calibration tracking with templates, signatures, and PDF export
+- Automatic daily database backups (stored in backups/, kept 30 days)
+- Help > Check for Updates: manual check shows "already current" or offers update; startup check only prompts when an update is available or the check fails
+- LAN reminders for instruments due for calibration
 
 DEPENDENCIES
 ------------
@@ -38,4 +42,5 @@ DEPENDENCIES
 - reportlab >= 3.6.0
 - Pillow >= 9.0.0
 
-For detailed instructions, see BUILD_INSTRUCTIONS.md
+For detailed build steps, see BUILD_INSTRUCTIONS.md.
+For usage, see USER_GUIDE.md.

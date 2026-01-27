@@ -8,11 +8,11 @@ echo ========================================
 echo.
 
 REM Check if PyInstaller is installed
-python -c "import PyInstaller" 2>nul
+py -c "import PyInstaller" 2>nul
 if errorlevel 1 (
     echo PyInstaller is not installed!
     echo Installing PyInstaller...
-    pip install pyinstaller
+    py -m pip install pyinstaller
     if errorlevel 1 (
         echo Failed to install PyInstaller!
         pause
@@ -30,7 +30,7 @@ REM Build executable
 echo Building executable with PyInstaller...
 echo.
 
-pyinstaller --name=CalibrationTracker ^
+py -m PyInstaller --name=CalibrationTracker ^
     --onefile ^
     --windowed ^
     --icon=cal_tracker.ico ^

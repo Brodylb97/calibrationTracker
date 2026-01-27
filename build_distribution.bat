@@ -50,6 +50,7 @@ if exist Signatures\*.jpg (
 REM Copy documentation
 echo Copying documentation...
 if exist USER_GUIDE.md copy USER_GUIDE.md %BUILD_DIR%\ >nul 2>&1
+if exist BUILD_INSTRUCTIONS.md copy BUILD_INSTRUCTIONS.md %BUILD_DIR%\ >nul 2>&1
 if exist INTEGRATE_UPDATES.md copy INTEGRATE_UPDATES.md %BUILD_DIR%\ >nul 2>&1
 
 REM Copy requirements
@@ -64,7 +65,7 @@ echo Includes update checker: Help - Check for Updates, update_app.py, VERSION, 
 echo.
 echo To build the installer:
 echo 1. Run build_executable.bat to create dist\CalibrationTracker.exe
-echo 2. Run Inno Setup with CalibrationTracker.iss
+echo 2. Compile CalibrationTracker.iss in Inno Setup (or run build_installer.bat)
 echo.
 ) > %BUILD_DIR%\README.txt
 
@@ -75,7 +76,7 @@ echo Distribution folder: %BUILD_DIR%
 echo ========================================
 echo.
 echo Next steps:
-echo 1. Run build_executable.bat to create dist\CalibrationTracker.exe
-echo 2. Create installer using Inno Setup with CalibrationTracker.iss
+echo   For installer: run build_executable.bat, then compile CalibrationTracker.iss in Inno Setup.
+echo   (Or run build_installer.bat to do exe + Inno in one go.)
 echo.
 pause

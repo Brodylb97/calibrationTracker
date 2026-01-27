@@ -10,9 +10,10 @@
 7. [Filters and Search](#filters-and-search)
 8. [Exporting Data](#exporting-data)
 9. [Settings and Configuration](#settings-and-configuration)
-10. [Keyboard Shortcuts](#keyboard-shortcuts)
-11. [Tips and Best Practices](#tips-and-best-practices)
-12. [Troubleshooting](#troubleshooting)
+10. [Checking for Updates](#checking-for-updates)
+11. [Keyboard Shortcuts](#keyboard-shortcuts)
+12. [Tips and Best Practices](#tips-and-best-practices)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -32,7 +33,9 @@ The **Calibration Tracker** is a comprehensive application designed to help you 
 - **History Tracking**: View complete calibration history for any instrument
 - **Statistics Dashboard**: Real-time statistics showing total, active, overdue, and due instruments
 - **Contextual Help**: Help dialogs available on all windows via the question mark button
+- **Check for Updates**: Help → Check for Updates to see if a newer version is available
 - **Customizable Interface**: Column widths persist between sessions, window title shows filtered counts
+- **Automatic Backups**: Daily database backups are kept in a `backups/` folder
 
 ---
 
@@ -68,13 +71,9 @@ The **Calibration Tracker** is a comprehensive application designed to help you 
 
 The main window consists of several key areas:
 
-#### 1. Toolbar
-Located at the top, provides quick access to common actions:
-- **New**: Create a new instrument
-- **Edit**: Edit the selected instrument
-- **Mark Calibrated**: Record a new calibration
-- **History**: View calibration history
-- **Settings**: Open application settings
+#### 1. Menu Bar and Toolbar
+- **Help → Check for Updates**: Manually check for a newer version. If you're current, a message says so; if an update is available, you can choose to update now or later. The application also checks automatically on startup but only shows a window when an update is available or when the check fails.
+- **Toolbar** (quick access): **New**, **Edit**, **Mark Calibrated**, **History**, **Settings**
 
 #### 2. Filter Bar
 Below the toolbar, allows you to filter instruments:
@@ -523,6 +522,16 @@ Configure calibration reminders:
 - **Reminder window (days)**: How many days before due date to send reminders
 - **LAN broadcast settings**: Configure network reminder broadcasts
 
+### Checking for Updates
+
+1. Go to **Help → Check for Updates...**
+2. The application contacts the update server and compares your installed version with the latest.
+3. **If you're already on the latest version**: A message says "You're already on the latest version (x.y)."
+4. **If an update is available**: You can choose **Update now** (the app will close and run the updater) or **Later**.
+5. **Automatic check on startup**: The app checks for updates when it starts. It only shows a window if an update is available or if the check fails—you will not see a "you're current" popup on startup.
+
+**Note**: "Update now" requires Python to be on your system PATH when running the installed executable. The installer can add Python to your PATH if it finds an installation.
+
 ### Destinations
 
 Manage calibration destinations (for SEND_OUT calibrations):
@@ -597,7 +606,7 @@ To send reminders for instruments due for calibration:
 
 ### Data Management
 
-1. **Regular backups**: Back up the `calibration.db` file regularly
+1. **Automatic backups**: The app creates daily backups in the `backups/` folder; keep these or copy them off as needed
 2. **Export important data**: Periodically export calibration records to PDF for archival
 3. **Review overdue items**: Use the "Overdue" filter regularly to stay on top of due dates
 4. **Keep notes updated**: Add notes to instruments and calibrations for important information
@@ -655,7 +664,7 @@ To send reminders for instruments due for calibration:
 **Problem**: "No module named 'reportlab'" error
 
 **Solution**:
-- Install the reportlab library: `pip install reportlab`
+- Install the reportlab library: `py -m pip install reportlab` (or `pip install reportlab` if you use pip directly)
 - Restart the application
 
 #### Search Not Finding Instruments
@@ -700,17 +709,19 @@ The application creates and uses the following files and directories:
 - `calibration.db`: SQLite database containing all data
 - `attachments/`: Directory containing attached calibration files
 - `Signatures/`: Directory containing signature image files (PNG, JPG, JPEG, GIF, or BMP)
+- `backups/`: Directory for automatic daily database backups (created by the app)
 - `logs/`: Directory containing application logs
 - `calibration_crash.log`: Crash log file
 
 ### Data Backup
 
-To backup your data:
+**Automatic backups**: The application performs a daily database backup on startup. Backups are stored in the `backups/` folder (e.g. `calibration_backup_YYYYMMDD_HHMMSS.db`). Old backups are removed after 30 days.
+
+**Manual backup**:
 
 1. Close the application
 2. Copy the `calibration.db` file to a safe location
-3. Optionally copy the `attachments/` directory
-4. Optionally copy the `Signatures/` directory if you want to preserve signature images
+3. Optionally copy the `attachments/` and `Signatures/` directories
 
 To restore:
 
@@ -778,7 +789,11 @@ The following features have been added in recent versions:
 - **Visual Search Feedback**: Search terms are highlighted in matching table cells
 - **Clear Button**: Easy-to-access clear button for search box
 
+#### Updates and Backups
+- **Help → Check for Updates**: Manual check shows "You're already on the latest version" or offers an update; startup check only prompts when an update is available or when the check fails
+- **Automatic daily backups**: Database backups are stored in `backups/` and cleaned up after 30 days
+
 ---
 
-*Last Updated: 2024*
-*Version: Current Release*
+*Last Updated: January 2025*
+*See the application Help menu or VERSION file for the current release version.*
