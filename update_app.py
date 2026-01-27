@@ -367,12 +367,22 @@ def main():
             no_restart=getattr(args, "no_restart", False),
         )
     except Exception as e:
-        print(f"Update failed: {e}", file=sys.stderr)
+        err_msg = str(e)
+        print(f"Update failed: {err_msg}", file=sys.stderr)
         if sys.platform == "win32":
             try:
-                input("Press Enter to close...")
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(
+                    None,
+                    f"Update failed:\n\n{err_msg}",
+                    "Calibration Tracker – Update Failed",
+                    0x10,  # MB_ICONERROR
+                )
             except Exception:
-                pass
+                try:
+                    input("Press Enter to close...")
+                except Exception:
+                    pass
         sys.exit(1)
 
 

@@ -259,7 +259,7 @@ def trigger_update_script(wait_for_pid=None, config_path=None, restore_db_path=N
     try:
         creationflags = 0
         if sys.platform == "win32":
-            creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0x10)
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
         subprocess.Popen(
             cmd,
             cwd=str(app_dir),
@@ -277,12 +277,16 @@ def _schedule_restart_in_user_session(exe_path, db_path, delay_seconds=15):
     user session (same drive mappings, e.g. Z:) instead of an elevated session.
     """
     exe_path = str(Path(exe_path).resolve())
+    app_dir = str(Path(exe_path).parent)
     db_path = str(db_path)
     fd, batch_path = tempfile.mkstemp(suffix=".bat", prefix="CalTracker_restart_")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write("@echo off\n")
             f.write(f"ping -n {delay_seconds + 1} 127.0.0.1 >nul\n")
+            # Run from app dir so onefile exe has correct CWD (avoids Python DLL load failures)
+            app_dir_esc = app_dir.replace('"', '""')
+            f.write(f'cd /d "{app_dir_esc}"\n')
             # start "" "exe" "--db" "db_path" — quote paths for spaces/special chars
             exe_esc = exe_path.replace('"', '""')
             db_esc = db_path.replace('"', '""')
