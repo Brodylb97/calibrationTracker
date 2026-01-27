@@ -207,12 +207,13 @@ def replace_with_extracted(archive_path, app_dir, exclude_patterns=None):
                 print(f"Warning: could not write {dest}: {e}", file=sys.stderr)
 
 
-def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=None):
+def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=None, no_restart=False):
     """
     Perform full update flow: optional wait for PID, version check, download,
     backup, replace, cleanup, restart. Raises on fatal errors.
     restore_db_path: if set, the restarted app is launched with --db <path>
     so it reopens on the same database (e.g. server DB) instead of the local one.
+    no_restart: if True, do not start the app (caller scheduled a user-session restart).
     """
     app_dir = config["_app_dir_resolved"]
     remote_version_url = config.get("remote_version_url")
@@ -282,21 +283,24 @@ def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=
         print("Cleaning up temporary files...")
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-        app_exe = app_dir / app_executable
-        if app_exe.exists():
-            print("Restarting application...")
-            cmd = [str(app_exe)]
-            if restore_db_path:
-                cmd.extend(["--db", str(restore_db_path)])
-            subprocess.Popen(cmd, cwd=str(app_dir), shell=False)
-        else:
-            # Run as Python if no exe (developer mode)
-            main_py = app_dir / "main.py"
-            if main_py.exists():
-                cmd = [sys.executable, str(main_py)]
+        if not no_restart:
+            app_exe = app_dir / app_executable
+            if app_exe.exists():
+                print("Restarting application...")
+                cmd = [str(app_exe)]
                 if restore_db_path:
                     cmd.extend(["--db", str(restore_db_path)])
                 subprocess.Popen(cmd, cwd=str(app_dir), shell=False)
+            else:
+                # Run as Python if no exe (developer mode)
+                main_py = app_dir / "main.py"
+                if main_py.exists():
+                    cmd = [sys.executable, str(main_py)]
+                    if restore_db_path:
+                        cmd.extend(["--db", str(restore_db_path)])
+                    subprocess.Popen(cmd, cwd=str(app_dir), shell=False)
+        else:
+            print("Restart was scheduled by the application (user session).")
 
     finally:
         if temp_dir.exists():
@@ -323,6 +327,8 @@ def _try_relaunch_elevated(args):
             params_list.append("--skip-version-check")
         if getattr(args, "restore_db", None):
             params_list.extend(["--restore-db", str(args.restore_db)])
+        if getattr(args, "no_restart", False):
+            params_list.append("--no-restart")
         params = " ".join('"{}"'.format(p) if " " in str(p) else str(p) for p in params_list)
         exe = sys.executable if sys.executable else "python"
         ret = ctypes.windll.shell32.ShellExecuteW(
@@ -341,6 +347,7 @@ def main():
     parser.add_argument("--wait-pid", type=int, metavar="PID", help="Wait for this process ID to exit before updating")
     parser.add_argument("--skip-version-check", action="store_true", help="Install package even if version is not newer")
     parser.add_argument("--restore-db", type=str, metavar="PATH", help="Restart app with --db PATH so it reopens on the same database")
+    parser.add_argument("--no-restart", action="store_true", help="Do not start the app after update (caller scheduled user-session restart)")
     parser.add_argument("--elevated", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
@@ -357,6 +364,7 @@ def main():
             wait_pid=args.wait_pid,
             skip_version_check=args.skip_version_check,
             restore_db_path=getattr(args, "restore_db", None),
+            no_restart=getattr(args, "no_restart", False),
         )
     except Exception as e:
         print(f"Update failed: {e}", file=sys.stderr)

@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 # Reuse config/version logic from update_app without circular imports
@@ -218,12 +219,14 @@ def is_update_available(config=None):
     return remote_tup > local_tup, current, latest, None
 
 
-def trigger_update_script(wait_for_pid=None, config_path=None, restore_db_path=None):
+def trigger_update_script(wait_for_pid=None, config_path=None, restore_db_path=None, no_restart=False):
     """
     Start the external update script (update_app.py). Optionally pass the current
     process PID so the script waits for this process to exit before applying updates.
     restore_db_path: if set, the updater will restart the app with --db <path> so it
     reopens on the same database (e.g. server DB) instead of defaulting to local.
+    no_restart: if True, pass --no-restart so the updater does not start the app
+    (caller is doing a user-session delayed restart so the app sees the same drive mappings).
     Returns True if the script was started, False on error.
     When run from the frozen exe, sys.executable is the exe so we run Python with
     update_app.py if python is on PATH; otherwise "Update now" will not apply updates.
@@ -251,6 +254,8 @@ def trigger_update_script(wait_for_pid=None, config_path=None, restore_db_path=N
         cmd.extend(["--wait-pid", str(wait_for_pid)])
     if restore_db_path:
         cmd.extend(["--restore-db", str(restore_db_path)])
+    if no_restart:
+        cmd.append("--no-restart")
     try:
         creationflags = 0
         if sys.platform == "win32":
@@ -265,6 +270,39 @@ def trigger_update_script(wait_for_pid=None, config_path=None, restore_db_path=N
         return False
 
 
+def _schedule_restart_in_user_session(exe_path, db_path, delay_seconds=15):
+    """
+    Start a detached process that waits then launches the exe with --db <path>.
+    Used when updating from the installed exe so the restarted app runs in the
+    user session (same drive mappings, e.g. Z:) instead of an elevated session.
+    """
+    exe_path = str(Path(exe_path).resolve())
+    db_path = str(db_path)
+    fd, batch_path = tempfile.mkstemp(suffix=".bat", prefix="CalTracker_restart_")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("@echo off\n")
+            f.write(f"ping -n {delay_seconds + 1} 127.0.0.1 >nul\n")
+            # start "" "exe" "--db" "db_path" — quote paths for spaces/special chars
+            exe_esc = exe_path.replace('"', '""')
+            db_esc = db_path.replace('"', '""')
+            f.write(f'start "" "{exe_esc}" "--db" "{db_esc}"\n')
+            f.write('del /f /q "%~f0"\n')  # delete self so temp is cleaned
+        # Run detached so it keeps running after we exit; user session so Z: is available
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        subprocess.Popen(
+            ["cmd", "/c", batch_path],
+            creationflags=flags | creationflags,
+            cwd=Path(exe_path).parent,
+        )
+    except Exception:
+        try:
+            os.unlink(batch_path)
+        except OSError:
+            pass
+
+
 def trigger_update_and_exit(restore_db_path=None):
     """
     Start the update script with --wait-pid <current pid>, then exit so the
@@ -272,10 +310,20 @@ def trigger_update_and_exit(restore_db_path=None):
     chooses "Update now" in the UI.
     restore_db_path: if set, the restarted app will be launched with --db <path>
     so it reopens on the same database (e.g. server DB) instead of the local one.
+    When running the installed exe, we schedule the restart from this (user) session
+    so the restarted app sees the same drive mappings (e.g. Z:); the updater is
+    told not to restart (--no-restart).
     When running the installed exe, Python must be on PATH to run the updater;
     otherwise the user can download the new installer from GitHub.
     """
     pid = os.getpid()
+    if restore_db_path and getattr(sys, "frozen", False):
+        # Installed exe: updater may run elevated and lose Z:; restart from user session
+        _schedule_restart_in_user_session(sys.executable, restore_db_path)
+        if trigger_update_script(
+            wait_for_pid=pid, restore_db_path=restore_db_path, no_restart=True
+        ):
+            sys.exit(0)
     if trigger_update_script(wait_for_pid=pid, restore_db_path=restore_db_path):
         sys.exit(0)
     if getattr(sys, "frozen", False):
