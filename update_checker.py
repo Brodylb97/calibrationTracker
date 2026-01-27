@@ -10,7 +10,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 # Reuse config/version logic from update_app without circular imports
@@ -270,43 +269,6 @@ def trigger_update_script(wait_for_pid=None, config_path=None, restore_db_path=N
         return False
 
 
-def _schedule_restart_in_user_session(exe_path, db_path, delay_seconds=15):
-    """
-    Start a detached process that waits then launches the exe with --db <path>.
-    Used when updating from the installed exe so the restarted app runs in the
-    user session (same drive mappings, e.g. Z:) instead of an elevated session.
-    """
-    exe_path = str(Path(exe_path).resolve())
-    app_dir = str(Path(exe_path).parent)
-    db_path = str(db_path)
-    fd, batch_path = tempfile.mkstemp(suffix=".bat", prefix="CalTracker_restart_")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write("@echo off\n")
-            f.write(f"ping -n {delay_seconds + 1} 127.0.0.1 >nul\n")
-            # Run from app dir so onefile exe has correct CWD (avoids Python DLL load failures)
-            app_dir_esc = app_dir.replace('"', '""')
-            f.write(f'cd /d "{app_dir_esc}"\n')
-            # start "" "exe" "--db" "db_path" — quote paths for spaces/special chars
-            exe_esc = exe_path.replace('"', '""')
-            db_esc = db_path.replace('"', '""')
-            f.write(f'start "" "{exe_esc}" "--db" "{db_esc}"\n')
-            f.write('del /f /q "%~f0"\n')  # delete self so temp is cleaned
-        # Run detached so it keeps running after we exit; user session so Z: is available
-        flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-        subprocess.Popen(
-            ["cmd", "/c", batch_path],
-            creationflags=flags | creationflags,
-            cwd=Path(exe_path).parent,
-        )
-    except Exception:
-        try:
-            os.unlink(batch_path)
-        except OSError:
-            pass
-
-
 def trigger_update_and_exit(restore_db_path=None):
     """
     Start the update script with --wait-pid <current pid>, then exit so the
@@ -322,8 +284,7 @@ def trigger_update_and_exit(restore_db_path=None):
     """
     pid = os.getpid()
     if restore_db_path and getattr(sys, "frozen", False):
-        # Installed exe: updater may run elevated and lose Z:; restart from user session
-        _schedule_restart_in_user_session(sys.executable, restore_db_path)
+        # Installed exe: updater may run elevated and lose Z:; tell updater to schedule restart via Task Scheduler (avoids batch/cmd hierarchy that can cause "Failed to load Python DLL")
         if trigger_update_script(
             wait_for_pid=pid, restore_db_path=restore_db_path, no_restart=True
         ):
