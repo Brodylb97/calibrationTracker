@@ -1,0 +1,8 @@
+{
+  "_comment": "Copy this file to update_config.json and adjust URLs/paths. Do not commit credentials.",
+  "remote_version_url": "https://raw.githubusercontent.com/USER/REPO/BRANCH/VERSION",
+  "remote_package_url": "https://github.com/USER/REPO/archive/refs/heads/BRANCH.zip",
+  "current_version_file": "VERSION",
+  "app_executable": "CalibrationTracker.exe",
+  "app_dir": "."
+}

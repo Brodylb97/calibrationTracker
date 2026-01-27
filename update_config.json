@@ -1,0 +1,7 @@
+{
+  "remote_version_url": "https://cdn.jsdelivr.net/gh/Brodylb97/calibrationTracker@main/VERSION",
+  "remote_package_url": "https://github.com/Brodylb97/calibrationTracker/archive/refs/heads/main.zip",
+  "current_version_file": "VERSION",
+  "app_executable": "CalibrationTracker.exe",
+  "app_dir": "."
+}
