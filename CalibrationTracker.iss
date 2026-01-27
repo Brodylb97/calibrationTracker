@@ -3,7 +3,7 @@
 
 #define MyAppName "Calibration Tracker"
 ; Keep MyAppVersion in sync with the VERSION file in the repo root
-#define MyAppVersion "1.1.4"
+#define MyAppVersion "1.1.5"
 #define MyAppPublisher "Your Company Name"
 #define MyAppURL "https://www.example.com/"
 #define MyAppExeName "CalibrationTracker.exe"
