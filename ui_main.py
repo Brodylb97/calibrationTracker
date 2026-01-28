@@ -488,12 +488,13 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
                 <li><b>Calculation</b>: For computed fields
                     <ul>
                         <li><b>ABS_DIFF</b>: Absolute difference between two fields</li>
-                        <li><b>PCT_ERROR</b>: Percentage error calculation</li>
+                        <li><b>PCT_ERROR</b>: Percent error (|V1−V2|/|V2|×100)</li>
+                        <li><b>PCT_DIFF</b>: Percent difference (|V1−V2|/avg×100); order of fields does not matter</li>
                     </ul>
                 </li>
                 <li><b>Value 1 field</b>: First field for calculation</li>
                 <li><b>Value 2 field</b>: Second field for calculation</li>
-                <li><b>Tolerance</b>: Tolerance value for ABS_DIFF calculations</li>
+                <li><b>Tolerance</b>: For ABS_DIFF and PCT_DIFF; record auto-FAILs if exceeded</li>
             </ul>
             
             <h4>Autofill Feature:</h4>
@@ -1628,6 +1629,9 @@ class FieldEditDialog(QtWidgets.QDialog):
         self.calc_type_combo.addItem(
             "Percent error (|V1 - V2| / |V2| * 100)", "PCT_ERROR"
         )
+        self.calc_type_combo.addItem(
+            "Percent difference (|V1 - V2| / avg(V1,V2) * 100)", "PCT_DIFF"
+        )
 
         self.ref1_combo = QtWidgets.QComboBox()
         self.ref2_combo = QtWidgets.QComboBox()
@@ -1679,7 +1683,7 @@ class FieldEditDialog(QtWidgets.QDialog):
         form.addRow("Calculation", self.calc_type_combo)
         form.addRow("Value 1 field", self.ref1_combo)
         form.addRow("Value 2 field", self.ref2_combo)
-        form.addRow("Tolerance (for ABS diff)", self.tol_spin)
+        form.addRow("Tolerance (for abs or % diff)", self.tol_spin)
         
         # Autofill option
         self.autofill_check = QtWidgets.QCheckBox("Autofill from previous group")
@@ -1739,7 +1743,7 @@ class FieldEditDialog(QtWidgets.QDialog):
         ref1_name = self.ref1_combo.currentData()
         ref2_name = self.ref2_combo.currentData()
 
-        if calc_type in ("ABS_DIFF", "PCT_ERROR"):
+        if calc_type in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF"):
             if not ref1_name or not ref2_name or ref1_name == ref2_name:
                 QtWidgets.QMessageBox.warning(
                     self,
@@ -1749,7 +1753,7 @@ class FieldEditDialog(QtWidgets.QDialog):
                 return None
 
         tol = None
-        if calc_type in ("ABS_DIFF", "PCT_ERROR"):
+        if calc_type in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF"):
             tval = self.tol_spin.value()
             if tval > 0:
                 tol = tval
@@ -1783,7 +1787,15 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
 
         tpl = self.repo.get_template(template_id)
         self.setWindowTitle(f"Fields - {tpl['name']} (v{tpl['version']})")
-        self.resize(900, 500)
+        # Resize to 75% of screen size
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen:
+            screen_geometry = screen.geometry()
+            width = int(screen_geometry.width() * 0.75)
+            height = int(screen_geometry.height() * 0.75)
+            self.resize(width, height)
+        else:
+            self.resize(900, 500)  # Fallback to default size
 
         layout = QtWidgets.QVBoxLayout(self)
 
@@ -1864,6 +1876,10 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                     r1 = f.get("calc_ref1_name") or "?"
                     r2 = f.get("calc_ref2_name") or "?"
                     calc_desc = f"|{r1} - {r2}| / |{r2}| * 100"
+                elif f.get("calc_type") == "PCT_DIFF":
+                    r1 = f.get("calc_ref1_name") or "?"
+                    r2 = f.get("calc_ref2_name") or "?"
+                    calc_desc = f"|{r1} - {r2}| / avg * 100"
 
                 tol = f.get("tolerance")
                 tol_txt = "" if tol is None else str(tol)
@@ -2033,7 +2049,7 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
             ref2 = f.get("calc_ref2_name")
             tol = f.get("tolerance")
 
-            if calc_type == "ABS_DIFF" and old_suffix and new_suffix:
+            if calc_type in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF") and old_suffix and new_suffix:
                 if ref1:
                     ref1 = ref1.replace(old_suffix, new_suffix)
                 if ref2:
@@ -2289,7 +2305,7 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
 
         for v in vals:
             # Only show computed diff-like fields
-            if v.get("calc_type") not in ("ABS_DIFF", "PCT_ERROR"):
+            if v.get("calc_type") not in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF"):
                 continue
 
             val_txt = v.get("value_text")
@@ -3321,12 +3337,32 @@ class CalibrationFormDialog(QtWidgets.QDialog):
                     result_val = ""
                 field_values[fid] = result_val
 
+            elif calc_type == "PCT_DIFF":
+                # Percent difference: |V1 - V2| / avg(V1,V2) * 100 = 200*|V1-V2|/(V1+V2); order of fields does not matter
+                ref1 = f.get("calc_ref1_name")
+                ref2 = f.get("calc_ref2_name")
+                v1 = values_by_name.get(ref1)
+                v2 = values_by_name.get(ref2)
+                result_val = ""
+                try:
+                    if v1 not in (None, "") and v2 not in (None, ""):
+                        a = float(v1)
+                        b = float(v2)
+                        denom = a + b
+                        if denom != 0:
+                            result_val = f"{(200.0 * abs(a - b) / denom):.3f}"
+                        else:
+                            result_val = ""
+                except (TypeError, ValueError):
+                    result_val = ""
+                field_values[fid] = result_val
+
         # If you ever add more calc types, handle them here.
 
-        # Third pass: auto-FAIL if any ABS_DIFF exceeds tolerance
+        # Third pass: auto-FAIL if any ABS_DIFF or PCT_DIFF exceeds tolerance
         any_out_of_tol = False
         for f in self.fields:
-            if f.get("calc_type") != "ABS_DIFF":
+            if f.get("calc_type") not in ("ABS_DIFF", "PCT_DIFF"):
                 continue
 
             tol_raw = f.get("tolerance")

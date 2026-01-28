@@ -1,19 +1,34 @@
 # pdf_export.py
 """
 Export calibration records to PDF using reportlab.
-Single-record export and batch export to a directory (organized by instrument type).
+Portrait, black and white. Logo, calibration details, one table per field group
+(black headers, header row can word-wrap; tables do not wrap/split). Signatures
+displayed as embedded images from Signatures/. Notes at bottom.
 """
 
 from pathlib import Path
 import re
+from collections import OrderedDict
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, Image, Spacer, PageBreak
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Table,
+    TableStyle,
+    Image,
+    Spacer,
+    KeepTogether,
+)
 
 from database import get_base_dir
+
+# Black and white only
+BLACK = colors.HexColor("#000000")
+WHITE = colors.HexColor("#ffffff")
 
 
 def _safe_filename(s: str) -> str:
@@ -23,16 +38,78 @@ def _safe_filename(s: str) -> str:
 
 
 def _logo_path() -> Path:
-    """Path to AHI_logo.png (centered at top of in-house PDF exports)."""
+    """Path to AHI_logo.png (centered at top)."""
     return get_base_dir() / "AHI_logo.png"
+
+
+def _signatures_dir() -> Path:
+    """Path to Signatures subdirectory."""
+    return get_base_dir() / "Signatures"
+
+
+def _group_values_by_group(values: list) -> OrderedDict:
+    """Partition values by group_name, preserving template order."""
+    groups = OrderedDict()
+    for v in values:
+        gname = v.get("group_name") or ""
+        if gname not in groups:
+            groups[gname] = []
+        groups[gname].append(v)
+    return groups
+
+
+def _signature_image_path(filename: str | None) -> Path | None:
+    """Return path to signature image in Signatures/ if file exists."""
+    if not (filename or "").strip():
+        return None
+    p = _signatures_dir() / filename.strip()
+    return p if p.is_file() else None
+
+
+def _find_signature_image(values: list, performed_by: str) -> Path | None:
+    """
+    Find signature image path: first value with data_type 'signature' and filename,
+    else Signatures/{performed_by}.png if it exists.
+    """
+    sig_dir = _signatures_dir()
+    if not sig_dir.is_dir():
+        return None
+    for v in values:
+        if (v.get("data_type") or "").lower() == "signature":
+            filename = (v.get("value_text") or "").strip()
+            if filename:
+                p = sig_dir / filename
+                if p.is_file():
+                    return p
+    if performed_by:
+        for ext in (".png", ".jpg", ".jpeg", ".gif", ".bmp"):
+            p = sig_dir / f"{performed_by}{ext}"
+            if p.is_file():
+                return p
+    return None
+
+
+def _make_signature_flowable(filename: str | None, max_h: float = 0.35 * inch, max_w: float = 1.0 * inch):
+    """Return an Image flowable for Signatures/filename, or None if not found."""
+    p = _signature_image_path(filename)
+    if not p:
+        return None
+    img = Image(str(p))
+    # Preserve aspect ratio while fitting within max_w/max_h.
+    ow = float(getattr(img, "imageWidth", img.drawWidth) or img.drawWidth)
+    oh = float(getattr(img, "imageHeight", img.drawHeight) or img.drawHeight)
+    if ow > 0 and oh > 0:
+        scale = min(max_w / ow, max_h / oh, 1.0)
+        img.drawWidth = ow * scale
+        img.drawHeight = oh * scale
+    return img
 
 
 def export_calibration_to_pdf(repo, rec_id: int, output_path: str | Path) -> None:
     """
     Export a single calibration record to a PDF file.
-    repo: CalibrationRepository instance.
-    rec_id: calibration record id.
-    output_path: path to the output PDF file.
+    Layout: logo, details (each on own line), one table per group (delineated
+    headers, signatures in table cells), notes at bottom. Fit to one sheet.
     """
     output_path = Path(output_path)
     rec = repo.get_calibration_record_with_template(rec_id)
@@ -41,99 +118,166 @@ def export_calibration_to_pdf(repo, rec_id: int, output_path: str | Path) -> Non
     instrument = repo.get_instrument(rec["instrument_id"]) or {}
     values = repo.get_calibration_values(rec_id)
 
+    # Portrait, black and white
     doc = SimpleDocTemplate(
         str(output_path),
         pagesize=letter,
-        rightMargin=0.75 * inch,
-        leftMargin=0.75 * inch,
-        topMargin=0.75 * inch,
-        bottomMargin=0.75 * inch,
+        rightMargin=0.5 * inch,
+        leftMargin=0.5 * inch,
+        topMargin=0.4 * inch,
+        bottomMargin=0.4 * inch,
     )
     styles = getSampleStyleSheet()
+    small_style = ParagraphStyle(
+        name="Small",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=8,
+        leading=8 * 1.5,
+        textColor=BLACK,
+    )
+    title_style = ParagraphStyle(
+        name="PDFTitle",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=12,
+        leading=12 * 1.5,
+        alignment=1,
+        textColor=BLACK,
+    )
+    # Header: clearly delineated (bold, black text, borders); body: centered
+    table_header_style = ParagraphStyle(
+        name="TableHeader",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=7,
+        leading=8,
+        textColor=WHITE,
+        alignment=1,
+    )
+    table_cell_style = ParagraphStyle(
+        name="TableCell",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7,
+        leading=8,
+        textColor=BLACK,
+        alignment=1,
+    )
     story = []
 
-    # Logo at top (centered)
+    # Logo at top center
     logo_path = _logo_path()
     if logo_path.is_file():
         img = Image(str(logo_path))
-        img.drawHeight = min(1.0 * inch, img.drawHeight)
-        img.drawWidth = min(2.5 * inch, img.drawWidth)
-        logo_table = Table([[img]], colWidths=[6 * inch])
-        logo_table.setStyle(
-            TableStyle([("ALIGN", (0, 0), (-1, -1), "CENTER")])
-        )
+        # Preserve aspect ratio while sizing (avoid stretching/smooshing).
+        max_h = 0.65 * inch
+        max_w = 1.9 * inch
+        ow = float(getattr(img, "imageWidth", img.drawWidth) or img.drawWidth)
+        oh = float(getattr(img, "imageHeight", img.drawHeight) or img.drawHeight)
+        if ow > 0 and oh > 0:
+            scale = min(max_w / ow, max_h / oh, 1.0)
+            img.drawWidth = ow * scale
+            img.drawHeight = oh * scale
+        logo_table = Table([[img]], colWidths=[7.5 * inch])
+        logo_table.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "CENTER")]))
         story.append(logo_table)
-        story.append(Spacer(1, 0.2 * inch))
+        story.append(Spacer(1, 0.08 * inch))
 
-    # Title
     tag = instrument.get("tag_number") or "—"
     cal_date = rec.get("cal_date") or "—"
     template_name = rec.get("template_name") or "Calibration"
-    story.append(Paragraph(f"<b>Calibration Record: {_safe_filename(tag)}</b>", styles["Heading1"]))
-    story.append(Spacer(1, 0.15 * inch))
+    location = instrument.get("location") or "—"
+    performed_by = rec.get("performed_by") or "—"
+    result = rec.get("result") or "—"
 
-    # Instrument / record info
-    info_data = [
-        ["Tag number", str(tag)],
-        ["Serial number", str(instrument.get("serial_number") or "—")],
-        ["Description", str(instrument.get("description") or "—")],
-        ["Location", str(instrument.get("location") or "—")],
-        ["Template", str(template_name)],
-        ["Calibration date", str(cal_date)],
-        ["Performed by", str(rec.get("performed_by") or "—")],
-        ["Result", str(rec.get("result") or "—")],
+    # Title: Calibration Record - TAG (centered)
+    story.append(Paragraph(f"Calibration Record - {_safe_filename(tag)}", title_style))
+    story.append(Spacer(1, 0.1 * inch))
+
+    # Calibration details (each on own line, left)
+    details_lines = [
+        f"<b>Location:</b> {_safe_filename(str(location))}",
+        f"<b>Calibration Date:</b> {cal_date}",
+        f"<b>Performed By:</b> {performed_by}",
+        f"<b>Result:</b> {result}",
+        f"<b>Template:</b> {template_name}",
     ]
-    notes = rec.get("notes")
-    if notes:
-        info_data.append(["Notes", str(notes)])
-    info_table = Table(info_data, colWidths=[1.5 * inch, 4.5 * inch])
-    info_table.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e0e0e0")),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-            ]
-        )
-    )
-    story.append(info_table)
-    story.append(Spacer(1, 0.25 * inch))
+    story.append(Paragraph("<br/>".join(details_lines), small_style))
+    story.append(Spacer(1, 0.12 * inch))
 
-    # Calibration values (template fields)
-    if values:
-        story.append(Paragraph("<b>Calibration values</b>", styles["Heading2"]))
-        story.append(Spacer(1, 0.1 * inch))
-        val_data = [["Field", "Value", "Unit"]]
-        for v in values:
+    # One table per group: clearly delineated column headers (bold, bordered), all cells centered
+    groups = _group_values_by_group(values)
+    pad = 3
+
+    for group_name, group_values in groups.items():
+        if not group_values:
+            continue
+        header_cells = []
+        data_cells = []
+        for v in group_values:
             label = v.get("label") or v.get("field_name") or "—"
-            val_text = (v.get("value_text") or "—").replace("\n", " ")
-            unit = (v.get("unit") or "—").strip() or "—"
-            val_data.append([label, val_text, unit])
-        val_table = Table(val_data, colWidths=[2.0 * inch, 3.0 * inch, 1.0 * inch])
-        val_table.setStyle(
+            unit = (v.get("unit") or "").strip()
+            tol_raw = v.get("tolerance")
+            tol_f = None
+            if tol_raw is not None and str(tol_raw).strip() != "":
+                try:
+                    tol_f = float(tol_raw)
+                except (ValueError, TypeError):
+                    pass
+            # Delta/difference columns: show tolerance in parentheses for pass/fail, e.g. "∆ Temp (±1.500 °F)"
+            if tol_f is not None:
+                tol_str = f"{tol_f:.3f}".rstrip("0").rstrip(".") if tol_f != int(tol_f) else str(int(tol_f))
+                if unit:
+                    header_text = f"{label} (±{tol_str} {unit})"
+                else:
+                    header_text = f"{label} (±{tol_str})"
+            elif unit:
+                header_text = f"{label} ({unit})"
+            else:
+                header_text = label
+            header_cells.append(Paragraph(header_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), table_header_style))
+
+            is_signature = (v.get("data_type") or "").lower() == "signature"
+            if is_signature:
+                sig_flowable = _make_signature_flowable(v.get("value_text"))
+                data_cells.append(sig_flowable if sig_flowable else Paragraph("—", table_cell_style))
+            else:
+                val_text = (v.get("value_text") or "—").replace("\n", " ")
+                data_cells.append(Paragraph(val_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), table_cell_style))
+
+        num_cols = len(header_cells)
+        if num_cols == 0:
+            continue
+        col_width = min(1.2 * inch, (7.5 * inch) / num_cols)
+        table_data = [header_cells, data_cells]
+        tbl = Table(table_data, colWidths=[col_width] * num_cols)
+        tbl.setStyle(
             TableStyle(
                 [
-                    ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 9),
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#c0c0c0")),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                    ("TOPPADDING", (0, 0), (-1, -1), 4),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    # Header: black with white text, with white grid lines for clear column delineation.
+                    ("BACKGROUND", (0, 0), (-1, 0), BLACK),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), WHITE),
+                    ("GRID", (0, 0), (-1, 0), 0.5, WHITE),
+                    # Body: black text, black grid lines.
+                    ("TEXTCOLOR", (0, 1), (-1, -1), BLACK),
+                    ("GRID", (0, 1), (-1, -1), 0.5, BLACK),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), pad),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), pad),
+                    ("TOPPADDING", (0, 0), (-1, -1), pad),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), pad),
                 ]
             )
         )
-        story.append(val_table)
+        story.append(KeepTogether([tbl]))
+        story.append(Spacer(1, 0.15 * inch))
+
+    # Notes at bottom
+    notes = rec.get("notes")
+    if notes:
+        story.append(Paragraph(f"<b>Notes:</b><br/>{notes}", small_style))
 
     doc.build(story)
 
@@ -150,7 +294,7 @@ def export_all_calibrations_to_directory(repo, base_dir: str | Path) -> dict:
     success_count = 0
     error_count = 0
     errors = []
-
+    
     for rec in records:
         rec_id = rec["id"]
         instrument_type_name = rec.get("instrument_type_name") or "Unknown"
@@ -169,7 +313,7 @@ def export_all_calibrations_to_directory(repo, base_dir: str | Path) -> dict:
         except Exception as e:
             error_count += 1
             errors.append(f"Record {rec_id} ({tag} {cal_date}): {e}")
-
+    
     return {
         "success_count": success_count,
         "attachment_count": 0,

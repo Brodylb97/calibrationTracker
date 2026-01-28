@@ -12,7 +12,7 @@ import shutil
 # -----------------------------------------------------------------------------
 
 def _last_db_file() -> Path:
-    """Path to the file storing the last-used DB path (for restart / manual launch)."""
+    """Path to the file storing the last-used DB path (for --db override / restart)."""
     if sys.platform == "win32":
         base = os.environ.get("APPDATA", "")
         if not base:
@@ -22,11 +22,6 @@ def _last_db_file() -> Path:
     else:
         base = Path.home() / ".config"
     return base / "CalibrationTracker" / "last_db.txt"
-
-
-def _user_fallback_db_path() -> Path:
-    """User-writable path for fallback DB when server or app-dir DB is read-only (e.g. Program Files)."""
-    return _last_db_file().parent / "calibration.db"
 
 
 def get_persisted_last_db_path() -> Path | None:
@@ -59,10 +54,16 @@ SERVER_DB_PATH = Path(
 
 
 def _path_equal(a: Path | None, b: Path | None) -> bool:
-    """True if both paths refer to the same file (normalized for slashes and case)."""
+    """True if both paths refer to the same location (normalized for slashes and case)."""
     if a is None or b is None:
         return a == b
     return os.path.normcase(os.path.normpath(str(a))) == os.path.normcase(os.path.normpath(str(b)))
+
+
+def is_server_db_path(path: Path | None) -> bool:
+    """True if path is the server database path (so we only use server, never Program Files or other local paths)."""
+    return path is not None and _path_equal(path, SERVER_DB_PATH)
+
 
 def get_base_dir() -> Path:
     """
@@ -75,20 +76,21 @@ def get_base_dir() -> Path:
 
 BASE_DIR = get_base_dir()
 
-# Default is the server DB; if it can't be opened, get_connection() falls back to local
+# App connects only to the server database (DB_PATH or explicit --db to same server).
 DB_PATH = SERVER_DB_PATH
 ATTACHMENTS_DIR = DB_PATH.parent / "attachments"
 
-# When default (network) is unavailable, we use local; this is set by get_connection()
 _effective_db_path: Path | None = None
 
+
 def get_effective_db_path() -> Path:
-    """Path of the DB actually in use (local fallback path when network is unavailable)."""
+    """Path of the DB in use (always the server path we connected to)."""
     return _effective_db_path if _effective_db_path is not None else DB_PATH
 
+
 def get_attachments_dir() -> Path:
-    """Attachments dir for the DB in use (matches get_effective_db_path())."""
-    return (BASE_DIR / "attachments") if _effective_db_path is not None else (DB_PATH.parent / "attachments")
+    """Attachments dir next to the server DB."""
+    return get_effective_db_path().parent / "attachments"
 
 # -----------------------------------------------------------------------------
 # Connection helpers
@@ -96,29 +98,14 @@ def get_attachments_dir() -> Path:
 
 def get_connection(db_path: Path | None = None):
     """
-    Get a database connection with optimized settings.
-    When db_path is None (default), tries DB_PATH (network) first; if that fails
-    with "unable to open database file", falls back to local calibration.db so
-    the app still runs when the network is unavailable.
+    Connect to the server database only. No fallback to local or user DB.
+    Raises on open failure (e.g. server unavailable) or if the database is read-only.
     """
     global _effective_db_path
     if db_path is None:
         db_path = DB_PATH
-    try:
-        conn = sqlite3.connect(str(db_path), timeout=30.0)  # 30 second timeout for locked database
-    except sqlite3.OperationalError as e:
-        if "unable to open database file" in str(e) and _path_equal(db_path, DB_PATH):
-            fallback = _user_fallback_db_path()
-            fallback.parent.mkdir(parents=True, exist_ok=True)
-            _effective_db_path = fallback
-            conn = sqlite3.connect(str(fallback), timeout=30.0)
-        else:
-            raise
-    else:
-        if _path_equal(db_path, DB_PATH):
-            _effective_db_path = None  # using default (network) successfully
-        else:
-            _effective_db_path = db_path  # explicit path (e.g. --db)
+    _effective_db_path = db_path
+    conn = sqlite3.connect(str(db_path), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -190,37 +177,22 @@ def seed_default_instrument_types(conn: sqlite3.Connection):
 
 def initialize_db(conn: sqlite3.Connection, db_path: Path | None = None) -> sqlite3.Connection:
     """
-    Initialize database schema with optimized indexes and constraints.
-    Also performs daily backup if needed.
-    If the database is read-only (e.g. network share without write access) and db_path
-    is the default network path, falls back to local calibration.db and returns that connection.
-    Caller should use the returned connection.
+    Initialize database schema and seed defaults. No fallback; app uses server DB only.
+    On read-only error, raises with a clear message so the user can fix server/share permissions.
     """
     try:
         _initialize_db_core(conn)
         return conn
     except sqlite3.OperationalError as e:
         err = str(e).lower()
-        if "readonly" not in err and "attempt to write" not in err:
-            raise
-        # Fall back to user-writable path on any read-only DB (e.g. server, Program Files, or other path)
-        fallback = _user_fallback_db_path()
-        if db_path is not None and _path_equal(db_path, fallback):
-            # Already using user fallback; nothing to try
-            raise
-        global _effective_db_path
-        import logging
-        logging.getLogger(__name__).warning(
-            "Database is read-only; falling back to user database: %s", fallback
-        )
-        conn.close()
-        _effective_db_path = fallback
-        fallback.parent.mkdir(parents=True, exist_ok=True)
-        new_conn = sqlite3.connect(str(fallback), timeout=30.0)
-        new_conn.row_factory = sqlite3.Row
-        new_conn.execute("PRAGMA foreign_keys = ON")
-        _initialize_db_core(new_conn)
-        return new_conn
+        if "readonly" in err or "attempt to write" in err:
+            path = db_path if db_path is not None else get_effective_db_path()
+            raise sqlite3.OperationalError(
+                f"The database at {path} is read-only. "
+                "Ensure the folder and file have write permission for your user "
+                "(check the network share or server permissions), then try again."
+            ) from e
+        raise
 
 
 def _initialize_db_core(conn: sqlite3.Connection) -> None:

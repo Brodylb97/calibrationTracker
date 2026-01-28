@@ -2,6 +2,18 @@
 
 This document provides step-by-step instructions for creating a distribution package and installer for the Calibration Tracker application.
 
+## One-command release (recommended)
+
+To run the full release sequence in order (update version, build exe, build update zip, build installer, git commit), use:
+
+```batch
+py release.py              REM prompts for version
+py release.py 1.3.6        REM use version 1.3.6
+py release.py --no-commit  REM do everything except git commit
+```
+
+This runs: 1) Update VERSION and CalibrationTracker.iss, 2) Build executable (PyInstaller), 3) Build update package (CalibrationTracker-windows.zip), 4) Build installer (Inno Setup), 5) Git commit. You can then create a GitHub Release and upload the zip, and `git push` if desired.
+
 ## Prerequisites
 
 1. **Python 3.8 or higher** - [Download Python](https://www.python.org/downloads/)
