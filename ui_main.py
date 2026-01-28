@@ -20,6 +20,143 @@ def _app_icon_path():
     return base / "cal_tracker.ico"
 
 
+# -----------------------------------------------------------------------------
+# Theme: persistence and color definitions
+# -----------------------------------------------------------------------------
+THEME_SETTINGS_KEY = "theme"
+DEFAULT_THEME = "Fusion"
+
+# Fusion = current default dark theme
+THEME_FUSION = {
+    "WINDOW_COLOR": "#4F5875",
+    "BASE_COLOR": "#262C3D",
+    "ALT_BASE_COLOR": "#30374A",
+    "TEXT_COLOR": "#F5F5F5",
+    "DISABLED_TEXT": "#9299AE",
+    "BUTTON_COLOR": "#333A4F",
+    "BORDER_COLOR": "#1E3E62",
+    "ACCENT_ORANGE": "#DC6D18",
+    "HIGHLIGHT": "#DC6D18",
+    "TOOLTIP_BASE": "#121C2A",
+    "TOOLTIP_TEXT": "#F5F5F5",
+}
+
+# Taylor's Theme
+THEME_TAYLOR = {
+    "WINDOW_COLOR": "#003314",
+    "BASE_COLOR": "#2C3227",
+    "ALT_BASE_COLOR": "#1a1e16",
+    "TEXT_COLOR": "#F2F3F4",
+    "DISABLED_TEXT": "#8a8d90",
+    "BUTTON_COLOR": "#427F80",
+    "BORDER_COLOR": "#427F80",
+    "ACCENT_ORANGE": "#C14404",
+    "HIGHLIGHT": "#C9A0DC",
+    "TOOLTIP_BASE": "#2C3227",
+    "TOOLTIP_TEXT": "#F2F3F4",
+}
+
+# Tess's Theme
+THEME_TESS = {
+    "WINDOW_COLOR": "#4F6A72",
+    "BASE_COLOR": "#3d5560",
+    "ALT_BASE_COLOR": "#5a7d88",
+    "TEXT_COLOR": "#E9E2D6",
+    "DISABLED_TEXT": "#9a958d",
+    "BUTTON_COLOR": "#729AA7",
+    "BORDER_COLOR": "#729AA7",
+    "ACCENT_ORANGE": "#E6A175",
+    "HIGHLIGHT": "#A4D5C2",
+    "TOOLTIP_BASE": "#3d5560",
+    "TOOLTIP_TEXT": "#E9E2D6",
+}
+
+# Retina Seering – super bright, mostly white; only text and highlight add color
+THEME_RETINA_SEERING = {
+    "WINDOW_COLOR": "#ffffff",
+    "BASE_COLOR": "#fafafa",
+    "ALT_BASE_COLOR": "#f5f5f5",
+    "TEXT_COLOR": "#2c2c2c",
+    "DISABLED_TEXT": "#9a9a9a",
+    "BUTTON_COLOR": "#f0f0f0",
+    "BORDER_COLOR": "#e0e0e0",
+    "ACCENT_ORANGE": "#606060",
+    "HIGHLIGHT": "#b8d4e8",
+    "TOOLTIP_BASE": "#fafafa",
+    "TOOLTIP_TEXT": "#2c2c2c",
+}
+
+# Vice – cyan, pink, mint, orange on dark purple/black
+THEME_VICE = {
+    "WINDOW_COLOR": "#2A2773",
+    "BASE_COLOR": "#000000",
+    "ALT_BASE_COLOR": "#64e8ba",
+    "TEXT_COLOR": "#ffffff",
+    "DISABLED_TEXT": "#8888aa",
+    "BUTTON_COLOR": "#0bd3d3",
+    "BORDER_COLOR": "#0bd3d3",
+    "ACCENT_ORANGE": "#D96236",
+    "HIGHLIGHT": "#f890e7",
+    "TOOLTIP_BASE": "#2A2773",
+    "TOOLTIP_TEXT": "#ffffff",
+}
+
+THEMES = {
+    "Fusion": THEME_FUSION,
+    "Taylor's Theme": THEME_TAYLOR,
+    "Tess's Theme": THEME_TESS,
+    "Retina Seering": THEME_RETINA_SEERING,
+    "Vice": THEME_VICE,
+}
+
+
+def get_saved_theme() -> str:
+    """Return the last selected theme name (stored in QSettings)."""
+    s = QtCore.QSettings("CalibrationTracker", "CalibrationTracker")
+    name = s.value(THEME_SETTINGS_KEY, DEFAULT_THEME, type=str)
+    return name if name in THEMES else DEFAULT_THEME
+
+
+def set_saved_theme(theme_name: str) -> None:
+    """Store the selected theme name in QSettings."""
+    if theme_name not in THEMES:
+        return
+    s = QtCore.QSettings("CalibrationTracker", "CalibrationTracker")
+    s.setValue(THEME_SETTINGS_KEY, theme_name)
+
+
+# -----------------------------------------------------------------------------
+# Text size: persistence and options
+# -----------------------------------------------------------------------------
+FONT_SIZE_SETTINGS_KEY = "font_size"
+DEFAULT_FONT_SIZE = 9
+# (display label, point size)
+FONT_SIZE_OPTIONS = [
+    ("Small", 8),
+    ("Medium", 9),
+    ("Large", 10),
+    ("Extra Large", 11),
+]
+FONT_SIZE_POINTS = {label: pt for label, pt in FONT_SIZE_OPTIONS}
+
+
+def get_saved_font_size() -> int:
+    """Return the last selected font size in points (stored in QSettings)."""
+    s = QtCore.QSettings("CalibrationTracker", "CalibrationTracker")
+    pt = s.value(FONT_SIZE_SETTINGS_KEY, DEFAULT_FONT_SIZE, type=int)
+    valid = {opt[1] for opt in FONT_SIZE_OPTIONS}
+    return pt if pt in valid else DEFAULT_FONT_SIZE
+
+
+def set_saved_font_size(pt: int) -> None:
+    """Store the selected font size in QSettings."""
+    valid = {opt[1] for opt in FONT_SIZE_OPTIONS}
+    if pt not in valid:
+        return
+    s = QtCore.QSettings("CalibrationTracker", "CalibrationTracker")
+    s.setValue(FONT_SIZE_SETTINGS_KEY, pt)
+
+
 class HighlightDelegate(QtWidgets.QStyledItemDelegate):
     """Custom delegate that highlights search terms in table cells."""
     def __init__(self, search_text="", parent=None):
@@ -3651,6 +3788,28 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Help menu
         help_menu = menubar.addMenu("&Help")
+        theme_sub = help_menu.addMenu("&Theme")
+        self._theme_action_group = QtWidgets.QActionGroup(self)
+        self._theme_action_group.setExclusive(True)
+        current_theme = get_saved_theme()
+        for theme_name in THEMES:
+            act = theme_sub.addAction(theme_name)
+            act.setCheckable(True)
+            act.setChecked(theme_name == current_theme)
+            act.triggered.connect(lambda checked, n=theme_name: self._on_theme_selected(n))
+            self._theme_action_group.addAction(act)
+        text_size_sub = help_menu.addMenu("&Text Size")
+        self._text_size_action_group = QtWidgets.QActionGroup(self)
+        self._text_size_action_group.setExclusive(True)
+        current_pt = get_saved_font_size()
+        for label, pt in FONT_SIZE_OPTIONS:
+            act = text_size_sub.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(pt == current_pt)
+            act.setData(pt)
+            act.triggered.connect(lambda checked, p=pt: self._on_text_size_selected(p))
+            self._text_size_action_group.addAction(act)
+        help_menu.addSeparator()
         shortcuts_action = help_menu.addAction("Keyboard Shortcuts...")
         shortcuts_action.setShortcut(QtGui.QKeySequence("F1"))
         shortcuts_action.triggered.connect(self.on_show_shortcuts)
@@ -4257,7 +4416,25 @@ class MainWindow(QtWidgets.QMainWindow):
                     header.resizeSection(i, int(width))
                 except (ValueError, TypeError):
                     pass
-    
+
+    def _on_theme_selected(self, theme_name: str):
+        """Apply the selected theme and remember it for next run."""
+        set_saved_theme(theme_name)
+        app = QtWidgets.QApplication.instance()
+        if app:
+            apply_global_style(app, theme_name)
+        for act in self._theme_action_group.actions():
+            act.setChecked(act.text() == theme_name)
+
+    def _on_text_size_selected(self, pt: int):
+        """Apply the selected text size and remember it for next run."""
+        set_saved_font_size(pt)
+        app = QtWidgets.QApplication.instance()
+        if app:
+            apply_global_style(app)
+        for act in self._text_size_action_group.actions():
+            act.setChecked(act.data() == pt)
+
     def on_show_shortcuts(self):
         """Show keyboard shortcuts dialog."""
         shortcuts = """
@@ -4306,27 +4483,31 @@ class MainWindow(QtWidgets.QMainWindow):
         dlg = HelpDialog("About Calibration Tracker", about_text, self)
         dlg.exec_()
 
-def apply_global_style(app: QtWidgets.QApplication):
+def apply_global_style(app: QtWidgets.QApplication, theme_name: str | None = None):
     """
     Apply modern, user-friendly styling to the application.
-    Uses a dark theme with the specified color scheme.
+    theme_name: one of THEMES keys (e.g. "Fusion", "Taylor's Theme"); if None, uses saved theme.
     """
-    # Color scheme constants
-    WINDOW_COLOR = "#4F5875"
-    BASE_COLOR = "#262C3D"
-    ALT_BASE_COLOR = "#30374A"
-    TEXT_COLOR = "#F5F5F5"
-    DISABLED_TEXT = "#9299AE"
-    BUTTON_COLOR = "#333A4F"
-    BORDER_COLOR = "#1E3E62"
-    ACCENT_ORANGE = "#DC6D18"
-    TOOLTIP_BASE = "#121C2A"
-    TOOLTIP_TEXT = "#F5F5F5"
-    
+    if theme_name is None:
+        theme_name = get_saved_theme()
+    if theme_name not in THEMES:
+        theme_name = DEFAULT_THEME
+    colors = THEMES[theme_name]
+    WINDOW_COLOR = colors["WINDOW_COLOR"]
+    BASE_COLOR = colors["BASE_COLOR"]
+    ALT_BASE_COLOR = colors["ALT_BASE_COLOR"]
+    TEXT_COLOR = colors["TEXT_COLOR"]
+    DISABLED_TEXT = colors["DISABLED_TEXT"]
+    BUTTON_COLOR = colors["BUTTON_COLOR"]
+    BORDER_COLOR = colors["BORDER_COLOR"]
+    ACCENT_ORANGE = colors["ACCENT_ORANGE"]
+    HIGHLIGHT = colors["HIGHLIGHT"]
+    TOOLTIP_BASE = colors["TOOLTIP_BASE"]
+    TOOLTIP_TEXT = colors["TOOLTIP_TEXT"]
+
     # Use Fusion style (modern & consistent across platforms)
     app.setStyle("Fusion")
 
-    # Dark palette with specified colors
     palette = app.palette()
     palette.setColor(QtGui.QPalette.Window, QtGui.QColor(WINDOW_COLOR))
     palette.setColor(QtGui.QPalette.WindowText, QtGui.QColor(TEXT_COLOR))
@@ -4337,21 +4518,20 @@ def apply_global_style(app: QtWidgets.QApplication):
     palette.setColor(QtGui.QPalette.Text, QtGui.QColor(TEXT_COLOR))
     palette.setColor(QtGui.QPalette.Button, QtGui.QColor(BUTTON_COLOR))
     palette.setColor(QtGui.QPalette.ButtonText, QtGui.QColor(TEXT_COLOR))
-    palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(ACCENT_ORANGE))
+    palette.setColor(QtGui.QPalette.Highlight, QtGui.QColor(HIGHLIGHT))
     palette.setColor(QtGui.QPalette.HighlightedText, QtGui.QColor(TEXT_COLOR))
     palette.setColor(QtGui.QPalette.Link, QtGui.QColor(ACCENT_ORANGE))
     palette.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.Text, QtGui.QColor(DISABLED_TEXT))
     palette.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.ButtonText, QtGui.QColor(DISABLED_TEXT))
     app.setPalette(palette)
 
-    # Modern font
-    app.setFont(QtGui.QFont("Segoe UI", 9))
+    font_pt = get_saved_font_size()
+    app.setFont(QtGui.QFont("Segoe UI", font_pt))
 
-    # Qt Style Sheet with specified dark color scheme
     qss = f"""
     * {{
         font-family: "Segoe UI", Arial, sans-serif;
-        font-size: 9pt;
+        font-size: {font_pt}pt;
     }}
 
     QMainWindow {{
@@ -4425,7 +4605,7 @@ def apply_global_style(app: QtWidgets.QApplication):
         border: 1px solid {BORDER_COLOR};
         border-radius: 3px;
         padding: 4px 6px;
-        selection-background-color: {ACCENT_ORANGE};
+        selection-background-color: {HIGHLIGHT};
         selection-color: {TEXT_COLOR};
     }}
     QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus {{
@@ -4455,7 +4635,7 @@ def apply_global_style(app: QtWidgets.QApplication):
     }}
     QComboBox QAbstractItemView {{
         background-color: {BASE_COLOR};
-        selection-background-color: {ACCENT_ORANGE};
+        selection-background-color: {HIGHLIGHT};
         selection-color: {TEXT_COLOR};
         border: 1px solid {BORDER_COLOR};
     }}
@@ -4484,7 +4664,7 @@ def apply_global_style(app: QtWidgets.QApplication):
         alternate-background-color: {ALT_BASE_COLOR};
         gridline-color: {BORDER_COLOR};
         color: {TEXT_COLOR};
-        selection-background-color: {ACCENT_ORANGE};
+        selection-background-color: {HIGHLIGHT};
         selection-color: {TEXT_COLOR};
         border: 1px solid {BORDER_COLOR};
     }}
@@ -4581,7 +4761,7 @@ def apply_global_style(app: QtWidgets.QApplication):
         border: 1px solid {BORDER_COLOR};
     }}
     QMenu::item:selected {{
-        background-color: {ACCENT_ORANGE};
+        background-color: {HIGHLIGHT};
     }}
     
     QToolTip {{
