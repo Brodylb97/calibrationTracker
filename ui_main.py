@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import csv
 from PyQt5 import QtWidgets, QtCore, QtGui
-from database import CalibrationRepository, get_effective_db_path
+from database import CalibrationRepository, get_effective_db_path, get_connection, DB_PATH, persist_last_db_path
 from lan_notify import send_due_reminders_via_lan
 
 
@@ -3810,6 +3810,10 @@ class MainWindow(QtWidgets.QMainWindow):
             act.triggered.connect(lambda checked, p=pt: self._on_text_size_selected(p))
             self._text_size_action_group.addAction(act)
         help_menu.addSeparator()
+        refresh_db_action = help_menu.addAction("Refresh database (reconnect to server)")
+        refresh_db_action.setToolTip("Try to reconnect to the server database if the app is using the local one")
+        refresh_db_action.triggered.connect(self._on_refresh_database)
+        help_menu.addSeparator()
         shortcuts_action = help_menu.addAction("Keyboard Shortcuts...")
         shortcuts_action.setShortcut(QtGui.QKeySequence("F1"))
         shortcuts_action.triggered.connect(self.on_show_shortcuts)
@@ -4434,6 +4438,41 @@ class MainWindow(QtWidgets.QMainWindow):
             apply_global_style(app)
         for act in self._text_size_action_group.actions():
             act.setChecked(act.data() == pt)
+
+    def _on_refresh_database(self):
+        """Try to reconnect to the server database; refresh UI if successful."""
+        try:
+            new_conn = get_connection(DB_PATH)
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Refresh database",
+                f"Could not connect to the server database:\n{e}\n\nStill using current database.",
+            )
+            return
+        if get_effective_db_path() != DB_PATH:
+            new_conn.close()
+            QtWidgets.QMessageBox.information(
+                self,
+                "Refresh database",
+                "Could not connect to the server database (e.g. network unavailable).\n\nStill using local database.",
+            )
+            return
+        try:
+            old_conn = self.repo.conn
+            old_conn.close()
+        except Exception:
+            pass
+        self.repo = CalibrationRepository(new_conn)
+        persist_last_db_path(get_effective_db_path())
+        self.load_instruments()
+        self._update_window_title()
+        self._update_statistics()
+        QtWidgets.QMessageBox.information(
+            self,
+            "Refresh database",
+            "Reconnected to the server database. Data has been reloaded.",
+        )
 
     def on_show_shortcuts(self):
         """Show keyboard shortcuts dialog."""
