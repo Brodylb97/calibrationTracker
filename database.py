@@ -52,6 +52,13 @@ SERVER_DB_PATH = Path(
     r"Z:\Shared\Laboratory\Particulate Matter and Other Results\Brody's Project Junk\Cal Tracker\calibration.db"
 )
 
+
+def _path_equal(a: Path | None, b: Path | None) -> bool:
+    """True if both paths refer to the same file (normalized for slashes and case)."""
+    if a is None or b is None:
+        return a == b
+    return os.path.normcase(os.path.normpath(str(a))) == os.path.normcase(os.path.normpath(str(b)))
+
 def get_base_dir() -> Path:
     """
     Base dir for the app (install dir when frozen, script dir when run from source).
@@ -95,14 +102,14 @@ def get_connection(db_path: Path | None = None):
     try:
         conn = sqlite3.connect(str(db_path), timeout=30.0)  # 30 second timeout for locked database
     except sqlite3.OperationalError as e:
-        if "unable to open database file" in str(e) and db_path == DB_PATH:
+        if "unable to open database file" in str(e) and _path_equal(db_path, DB_PATH):
             fallback = BASE_DIR / "calibration.db"
             _effective_db_path = fallback
             conn = sqlite3.connect(str(fallback), timeout=30.0)
         else:
             raise
     else:
-        if db_path == DB_PATH:
+        if _path_equal(db_path, DB_PATH):
             _effective_db_path = None  # using default (network) successfully
         else:
             _effective_db_path = db_path  # explicit path (e.g. --db)
@@ -190,8 +197,8 @@ def initialize_db(conn: sqlite3.Connection, db_path: Path | None = None) -> sqli
         err = str(e).lower()
         if "readonly" not in err and "attempt to write" not in err:
             raise
-        # Only fall back when we're on the default server path (not when user passed a different --db path)
-        if db_path is not None and db_path != DB_PATH:
+        # Only fall back when we're on the default server path (normalized comparison: other PCs may use different slashes)
+        if db_path is not None and not _path_equal(db_path, DB_PATH):
             raise
         fallback = BASE_DIR / "calibration.db"
         global _effective_db_path
