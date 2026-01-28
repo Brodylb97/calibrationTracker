@@ -18,20 +18,23 @@ QUICK START
 
 FILES INCLUDED
 --------------
-- *.py                    : Python source files (including database_backup.py, update_checker.py, update_app.py)
+- *.py                    : Python source files (including database_backup.py, update_checker.py, update_app.py, pdf_export.py)
 - requirements.txt       : Python dependencies
 - build_executable.bat    : Script to build standalone executable (uses py)
+- build_update_package.py : Script to create update zip (run after build_executable.bat; upload to GitHub Releases)
 - build_distribution.bat  : Script to create source distribution folder
-- build_installer.bat    : Script to build exe then compile Inno installer in one go
+- build_installer.bat     : Script to build exe then compile Inno installer in one go
 - CalibrationTracker.iss : Inno Setup installer script
-- BUILD_INSTRUCTIONS.md  : Detailed build instructions
-- USER_GUIDE.md          : User documentation
-- update_config.json     : Update checker config (remote version URL, etc.)
-- VERSION                : Current version (used by Help > Check for Updates)
+- BUILD_INSTRUCTIONS.md   : Detailed build instructions
+- USER_GUIDE.md           : User documentation
+- update_config.json      : Update checker config (remote version URL, package URL, etc.)
+- VERSION                 : Current version (used by Help > Check for Updates)
 
 FEATURES
 --------
-- Instrument and calibration tracking with templates, signatures, and PDF export
+- Instrument and calibration tracking with templates, signatures, and PDF export (single or all calibrations)
+- Themes: Help > Theme (Fusion, Taylor's Theme, Tess's Theme, Retina Seering, Vice); choice saved
+- Text size: Help > Text Size (Small, Medium, Large, Extra Large); choice saved
 - Automatic daily database backups (stored in backups/, kept 30 days)
 - Help > Check for Updates: manual check shows "already current" or offers update; startup check only prompts when an update is available or the check fails
 - LAN reminders for instruments due for calibration

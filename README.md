@@ -7,10 +7,12 @@ A desktop application for managing instrument calibrations: track instruments, r
 - **Instrument management** — ID, location, type, serial number, next due date, status
 - **Calibration records** — Templates with custom fields, signatures, autofill, and external-file attachments
 - **Visual indicators** — Color-coded table for overdue and upcoming due dates
-- **Export** — Current view to CSV; calibrations to PDF (including attachments)
+- **Export** — Current view to CSV; single calibration or all calibrations to PDF (instrument info, template, values; AHI logo on in-house exports)
 - **LAN reminders** — Broadcast reminders for instruments due for calibration
 - **Automatic backups** — Daily database backups in `backups/` (30-day retention)
-- **Check for updates** — Help → Check for Updates (manual check shows “already current” or offers update; startup check only prompts when an update is available or the check fails)
+- **Themes** — Help → Theme: Fusion, Taylor's Theme, Tess's Theme, Retina Seering, Vice (choice saved locally)
+- **Text size** — Help → Text Size: Small, Medium, Large, Extra Large (choice saved locally)
+- **Check for updates** — Help → Check for Updates (manual check shows “already current” or offers update; startup check only prompts when an update is available or the check fails). For installed users to receive new UI and features, releases must include a built update zip; see BUILD_INSTRUCTIONS.md.
 
 ## Requirements
 
@@ -27,12 +29,15 @@ py main.py
 ## Build executable and installer
 
 1. **Executable only:**  
-   `build_executable.bat` → produces `dist\CalibrationTracker.exe`
+   `build_executable.bat` → produces `dist\CalibrationTracker.exe` (run `restart_helper\build.bat` first if you need RestartHelper for updates).
 
 2. **Executable + installer:**  
    `build_installer.bat` (builds exe then compiles `CalibrationTracker.iss` with Inno Setup if ISCC is available), or run `build_executable.bat` then open `CalibrationTracker.iss` in Inno Setup and compile.
 
-3. **Source distribution folder:**  
+3. **Update package (for in-app updates):**  
+   After building the exe, run `py build_update_package.py` → produces `installer\CalibrationTracker-windows.zip`. Upload that file to a GitHub Release (asset name: `CalibrationTracker-windows.zip`) so “Check for Updates” delivers the new exe and UI to installed users.
+
+4. **Source distribution folder:**  
    `build_distribution.bat` → creates `dist\CalibrationTracker\` with all sources and docs.
 
 See **BUILD_INSTRUCTIONS.md** for full steps and **USER_GUIDE.md** for usage.

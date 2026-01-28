@@ -34,7 +34,9 @@ The **Calibration Tracker** is a comprehensive application designed to help you 
 - **Statistics Dashboard**: Real-time statistics showing total, active, overdue, and due instruments
 - **Contextual Help**: Help dialogs available on all windows via the question mark button
 - **Check for Updates**: Help → Check for Updates to see if a newer version is available
-- **Customizable Interface**: Column widths persist between sessions, window title shows filtered counts
+- **Themes**: Help → Theme — choose Fusion, Taylor's Theme, Tess's Theme, Retina Seering, or Vice; your choice is saved
+- **Text Size**: Help → Text Size — Small, Medium, Large, or Extra Large; your choice is saved
+- **Customizable Interface**: Column widths persist between sessions, window title shows version and filtered counts
 - **Automatic Backups**: Daily database backups are kept in a `backups/` folder
 
 ---
@@ -72,6 +74,8 @@ The **Calibration Tracker** is a comprehensive application designed to help you 
 The main window consists of several key areas:
 
 #### 1. Menu Bar and Toolbar
+- **Help → Theme**: Choose a color theme (Fusion, Taylor's Theme, Tess's Theme, Retina Seering, Vice). The selected theme is remembered for next time.
+- **Help → Text Size**: Choose Small (8pt), Medium (9pt), Large (10pt), or Extra Large (11pt). The selected size is remembered for next time.
 - **Help → Check for Updates**: Manually check for a newer version. If you're current, a message says so; if an update is available, you can choose to update now or later. The application also checks automatically on startup but only shows a window when an update is available or when the check fails.
 - **Toolbar** (quick access): **New**, **Edit**, **Mark Calibrated**, **History**, **Settings**
 
@@ -116,9 +120,9 @@ At the bottom, shows:
 
 #### 6. Window Title
 The window title dynamically shows:
-- Total number of instruments
-- Number of filtered instruments (when filters are active)
-- Example: "Calibration Tracker - 150 instruments (25 shown)"
+- Application version (from the VERSION file)
+- Total number of instruments and number of filtered instruments (when filters are active)
+- Example: "Calibration Tracker - 1.3.0 - 150 instruments (25 shown)"
 
 ### Visual Indicators
 
@@ -460,25 +464,20 @@ Export all calibration records organized by instrument type:
 3. Confirm the export
 4. The system will:
    - Create subdirectories for each instrument type
-   - Generate a PDF for each calibration record
-   - Export and organize any attached external calibration files
-   - Create an `_attachments` subdirectory for each calibration PDF containing its attached files
+   - Generate a PDF for each calibration record (instrument info, template name, cal date, performed by, result, notes, and calibration values)
 
 **Example structure**:
 ```
 Calibrations/
   ├── Weather Stations/
   │   ├── WS-001_2024-01-15.pdf
-  │   ├── WS-001_2024-01-15_attachments/
-  │   │   └── certificate.pdf
-  │   ├── WS-001_2024-02-20.pdf
-  │   └── WS-001_2024-02-20_attachments/
+  │   └── WS-001_2024-02-20.pdf
   └── Thermometers/
       ├── TH-001_2024-01-10.pdf
       └── TH-002_2024-01-12.pdf
 ```
 
-**Note**: The export includes a count of how many attachments were successfully exported.
+A summary message shows how many PDFs were exported successfully and any errors.
 
 ### Export Individual Calibration to PDF
 
@@ -489,14 +488,10 @@ Calibrations/
 5. Click **Save**
 
 **PDF Features**:
-- **Automatic formatting**: Tables are automatically sized to fit the page
-- **Word wrapping**: Headers wrap at word boundaries (never breaks words in the middle)
-- **In-house templates**: Calibrations for PULL_IN (in-house) instruments automatically format to fit on a single page with optimized spacing and font sizes
-- **Group organization**: Each group appears as a separate table with headers
-- **Notes included**: Template notes (permanent from template) appear at the bottom of every calibration
-- **Header repetition**: Table headers repeat on each page if a table spans multiple pages
-- **Signature images**: Signature fields display actual signature images in PDF tables (images are embedded from the Signatures folder)
-- **Black and white**: All tables use black and white only for optimal printing
+- **Logo**: In-house calibration PDFs can include the AHI logo (centered at top) when `AHI_logo.png` is present in the app folder
+- **Instrument and record info**: Tag, serial, description, location, template, cal date, performed by, result, notes
+- **Calibration values**: Template field labels and values in a table
+- **Automatic formatting**: Content is laid out for clear printing
 
 ---
 
@@ -522,15 +517,20 @@ Configure calibration reminders:
 - **Reminder window (days)**: How many days before due date to send reminders
 - **LAN broadcast settings**: Configure network reminder broadcasts
 
+### Themes and Text Size
+
+- **Help → Theme**: Choose a color theme. Options include Fusion (default dark), Taylor's Theme, Tess's Theme, Retina Seering (bright, minimal), and Vice (cyan/pink/mint on dark). Your choice is saved and used the next time you start the app.
+- **Help → Text Size**: Choose Small (8pt), Medium (9pt), Large (10pt), or Extra Large (11pt). Your choice is saved and used the next time you start the app.
+
 ### Checking for Updates
 
 1. Go to **Help → Check for Updates...**
 2. The application contacts the update server and compares your installed version with the latest.
 3. **If you're already on the latest version**: A message says "You're already on the latest version (x.y)."
-4. **If an update is available**: You can choose **Update now** (the app will close and run the updater) or **Later**.
+4. **If an update is available**: You can choose **Update now** (the app will close and run the updater, then reopen with the new version) or **Later**.
 5. **Automatic check on startup**: The app checks for updates when it starts. It only shows a window if an update is available or if the check fails—you will not see a "you're current" popup on startup.
 
-**Note**: "Update now" requires Python to be on your system PATH when running the installed executable. The installer can add Python to your PATH if it finds an installation.
+**Note**: "Update now" requires Python to be on your system PATH when running the installed executable. The installer can add Python to your PATH if it finds an installation. Updates are delivered from a release package that includes the new executable, so you get new themes, PDF export, and other UI changes.
 
 ### Destinations
 
@@ -789,9 +789,16 @@ The following features have been added in recent versions:
 - **Visual Search Feedback**: Search terms are highlighted in matching table cells
 - **Clear Button**: Easy-to-access clear button for search box
 
+#### Themes and Text Size
+- **Help → Theme**: Multiple color themes (Fusion, Taylor's Theme, Tess's Theme, Retina Seering, Vice); selection is saved
+- **Help → Text Size**: Small, Medium, Large, Extra Large; selection is saved
+
 #### Updates and Backups
-- **Help → Check for Updates**: Manual check shows "You're already on the latest version" or offers an update; startup check only prompts when an update is available or when the check fails
+- **Help → Check for Updates**: Manual check shows "You're already on the latest version" or offers an update; startup check only prompts when an update is available or when the check fails. Updates deliver the new executable so you get new UI and features.
 - **Automatic daily backups**: Database backups are stored in `backups/` and cleaned up after 30 days
+
+#### PDF Export
+- **Single and batch PDF export**: Export one calibration or all calibrations to PDF; instrument info, template, and calibration values; AHI logo on in-house exports when `AHI_logo.png` is present
 
 ---
 

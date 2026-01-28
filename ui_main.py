@@ -86,15 +86,15 @@ THEME_RETINA_SEERING = {
     "TOOLTIP_TEXT": "#2c2c2c",
 }
 
-# Vice – cyan, pink, mint, orange on dark purple/black
+# Vice – dark purple base; alternating rows = lighter purple; text white; outlines accent orange
 THEME_VICE = {
     "WINDOW_COLOR": "#2A2773",
-    "BASE_COLOR": "#000000",
-    "ALT_BASE_COLOR": "#64e8ba",
+    "BASE_COLOR": "#2A2773",
+    "ALT_BASE_COLOR": "#3d3a8c",
     "TEXT_COLOR": "#ffffff",
     "DISABLED_TEXT": "#8888aa",
     "BUTTON_COLOR": "#0bd3d3",
-    "BORDER_COLOR": "#0bd3d3",
+    "BORDER_COLOR": "#D96236",
     "ACCENT_ORANGE": "#D96236",
     "HIGHLIGHT": "#f890e7",
     "TOOLTIP_BASE": "#2A2773",

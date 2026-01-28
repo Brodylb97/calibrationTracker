@@ -3,9 +3,9 @@
 
 #define MyAppName "Calibration Tracker"
 ; Keep MyAppVersion in sync with the VERSION file in the repo root
-#define MyAppVersion "1.3.0"
-#define MyAppPublisher "Your Company Name"
-#define MyAppURL "https://www.example.com/"
+#define MyAppVersion "1.3.1"
+#define MyAppPublisher "Air Hygiene International, Inc."
+#define MyAppURL "https://www.airhygiene.com/"
 #define MyAppExeName "CalibrationTracker.exe"
 #define MyAppId "{{A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D}"
 

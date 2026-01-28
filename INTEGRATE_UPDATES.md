@@ -3,6 +3,7 @@
 ## Configuration
 
 - **Remote version URL**: Set in `update_config.json` as `remote_version_url` (e.g. `https://raw.githubusercontent.com/USER/REPO/BRANCH/VERSION`).
+- **Remote package URL**: Set in `update_config.json` as `remote_package_url`. For installed users to receive **new UI and features** (not just a new version number), this must point to a **release zip that contains the built CalibrationTracker.exe**, e.g. `https://github.com/USER/REPO/releases/latest/download/CalibrationTracker-windows.zip`. Create that zip with `py build_update_package.py` (after `build_executable.bat`) and upload it to each GitHub Release as an asset named `CalibrationTracker-windows.zip`. See BUILD_INSTRUCTIONS.md.
 - **Current version file**: Set in `update_config.json` as `current_version_file` (default: `VERSION`). The repo and the installed app should each have a `VERSION` file with a single line like `1.1`.
 
 ## Part 1 – Automated script

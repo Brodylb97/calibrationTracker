@@ -173,12 +173,16 @@ def replace_with_extracted(archive_path, app_dir, exclude_patterns=None):
     archive_path = Path(archive_path)
 
     with zipfile.ZipFile(archive_path, "r") as zf:
-        # GitHub source zips have a top-level dir like repo-master/
+        # GitHub source zips have a single top-level dir (e.g. repo-main/); our update zip is flat
         names = zf.namelist()
         if not names:
             return
         top_dirs = {n.split("/")[0] for n in names if "/" in n} or {n.split("\\")[0] for n in names if "\\" in n}
-        extract_root = next(iter(top_dirs)) if len(top_dirs) == 1 else ""
+        extract_root = ""
+        if len(top_dirs) == 1:
+            root = next(iter(top_dirs))
+            if all(n.endswith("/") or n == root or n.startswith(root + "/") for n in names):
+                extract_root = root
 
         def should_skip(rel_path):
             for pat in exclude_patterns:

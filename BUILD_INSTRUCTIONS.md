@@ -57,6 +57,22 @@ This creates a `dist\CalibrationTracker` folder containing:
 
 **Note:** The update checker (Help → Check for Updates) uses update_config.json and VERSION. These are installed by the Inno Setup installer so in-app update checks work.
 
+### In-app updates (Check for Updates)
+
+For **Check for Updates** to deliver new UI and features (not just a new VERSION number), the update package must contain the **built** CalibrationTracker.exe, not just source code. Do this for each release:
+
+1. Update `VERSION` and `CalibrationTracker.iss` (MyAppVersion) to the new version (e.g. 1.3.0).
+2. Run `build_executable.bat` (and `restart_helper\build.bat` if needed) so `dist\` has the new exe.
+3. Create the update zip:
+   ```batch
+   py build_update_package.py
+   ```
+   This creates `installer\CalibrationTracker-windows.zip` with the exe, RestartHelper, and runtime files.
+4. Create a **GitHub Release** for that version (e.g. v1.3.0), and **upload** `CalibrationTracker-windows.zip` as the release asset. Use the **exact** asset name: `CalibrationTracker-windows.zip`.
+5. In-app "Check for Updates" will then download that zip and replace the installed exe, so users get the new themes, PDF export, and other code changes.
+
+If you skip the release zip and only push source to GitHub, the updater would download the source zip (no exe), so the installed app would still run the old exe and new UI would not appear.
+
 ## Step 4: Create the Installer with Inno Setup
 
 1. **Install Inno Setup** (if not already installed)  
