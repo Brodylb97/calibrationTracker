@@ -287,7 +287,7 @@ def _write_restart_params(exe_path, db_path):
         return False
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f"{exe_path}\n{db_path}\n", encoding="utf-8")
+        path.write_text(f"{exe_path}\n{db_path or ''}\n", encoding="utf-8")
         return True
     except Exception:
         return False
@@ -350,13 +350,15 @@ def trigger_update_and_exit(restore_db_path=None):
     if restore_db_path and getattr(sys, "frozen", False):
         app_dir = _app_base_dir()
         stub = app_dir / "RestartHelper.exe"
-        if _write_restart_params(str(Path(sys.executable).resolve()), str(restore_db_path)):
-            if stub.is_file() and _create_restart_task_stub(stub):
+        # Write params so RestartHelper.exe (run by the updater when done) can reopen the app with --db.
+        if _write_restart_params(str(Path(sys.executable).resolve()), str(restore_db_path or "")):
+            if stub.is_file():
+                # Updater will run RestartHelper.exe at the end (no Task Scheduler).
                 if trigger_update_script(
                     wait_for_pid=pid, restore_db_path=restore_db_path, no_restart=True
                 ):
                     sys.exit(0)
-        # Stub missing or params/task failed: still run updater with no_restart; user starts manually
+        # Params or stub failed: still run updater with no_restart; user starts manually
         if trigger_update_script(
             wait_for_pid=pid, restore_db_path=restore_db_path, no_restart=True
         ):

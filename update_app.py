@@ -300,8 +300,21 @@ def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=
                         cmd.extend(["--db", str(restore_db_path)])
                     subprocess.Popen(cmd, cwd=str(app_dir), shell=False)
         else:
-            # App created the restart task from user session before starting us (we may run elevated); we do nothing here
-            print("Restart was scheduled by the application (user session).")
+            # App wrote restart_params.txt; we run RestartHelper.exe so it reopens the app (no Task Scheduler).
+            stub_exe = app_dir / "RestartHelper.exe"
+            if stub_exe.is_file():
+                print("Restarting application via RestartHelper...")
+                try:
+                    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                    subprocess.Popen(
+                        [str(stub_exe)],
+                        cwd=str(app_dir),
+                        creationflags=creationflags,
+                    )
+                except Exception as e:
+                    print(f"Could not run RestartHelper: {e}", file=sys.stderr)
+            else:
+                print("RestartHelper.exe not found; please start the application manually.")
 
     finally:
         if temp_dir.exists():

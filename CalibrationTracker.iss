@@ -3,7 +3,7 @@
 
 #define MyAppName "Calibration Tracker"
 ; Keep MyAppVersion in sync with the VERSION file in the repo root
-#define MyAppVersion "1.2.6"
+#define MyAppVersion "1.2.10"
 #define MyAppPublisher "Your Company Name"
 #define MyAppURL "https://www.example.com/"
 #define MyAppExeName "CalibrationTracker.exe"
@@ -46,7 +46,7 @@ Name: "quicklaunchicon"; Description: "{cm:CreateQuickLaunchIcon}"; GroupDescrip
 [Files]
 ; Main executable
 Source: "dist\CalibrationTracker.exe"; DestDir: "{app}"; Flags: ignoreversion
-; Stub used to reopen the app after an update (task runs this; it reads params and launches main exe)
+; Stub used to reopen the app after an update (updater runs this; it reads params and launches main exe)
 Source: "dist\RestartHelper.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Signatures folder
 Source: "Signatures\*"; DestDir: "{app}\Signatures"; Flags: ignoreversion recursesubdirs createallsubdirs

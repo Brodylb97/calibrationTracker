@@ -53,6 +53,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM Copy RestartHelper.exe into dist so Inno Setup can include it (post-update restart)
+if exist restart_helper\RestartHelper.exe (
+    copy /Y restart_helper\RestartHelper.exe dist\RestartHelper.exe >nul
+    echo RestartHelper.exe copied to dist\
+) else (
+    echo WARNING: restart_helper\RestartHelper.exe not found. Run restart_helper\build.bat first, then copy RestartHelper.exe to dist\ before building the installer.
+)
+
 echo.
 echo ========================================
 echo Build complete!

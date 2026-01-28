@@ -55,16 +55,19 @@ int main(int argc, char** argv) {
 
     trim_crlf(exe_path);
     trim_crlf(db_path);
-    if (!exe_path[0] || !db_path[0]) return 1;
+    if (!exe_path[0]) return 1;
 
     char work_dir[MAX_PATH];
     strncpy(work_dir, exe_path, sizeof work_dir - 1);
     work_dir[sizeof work_dir - 1] = '\0';
     dirname_inplace(work_dir);
 
-    /* cmdline = "exepath" --db "dbpath" (quoted so spaces are safe) */
+    /* cmdline = "exepath" [--db "dbpath"] (quoted so spaces are safe; omit --db if db_path empty) */
     char cmdline[CMD_BUF_SIZE];
-    snprintf(cmdline, sizeof cmdline, "\"%s\" --db \"%s\"", exe_path, db_path);
+    if (db_path[0])
+        snprintf(cmdline, sizeof cmdline, "\"%s\" --db \"%s\"", exe_path, db_path);
+    else
+        snprintf(cmdline, sizeof cmdline, "\"%s\"", exe_path);
 
     STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi = { 0 };
