@@ -46,7 +46,8 @@ def main():
     try:
         conn = get_connection(db_path)
         persist_last_db_path(get_effective_db_path())  # so manual start after update uses same DB
-        conn = initialize_db(conn, db_path)  # may fall back to local if network DB is read-only
+        conn = initialize_db(conn, db_path)  # may fall back to user DB if current path is read-only
+        persist_last_db_path(get_effective_db_path())  # persist again in case we fell back to user DB
         repo = CalibrationRepository(conn)
 
         if args.send_reminders:

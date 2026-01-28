@@ -4500,9 +4500,14 @@ class MainWindow(QtWidgets.QMainWindow):
     
     def on_show_about(self):
         """Show about dialog."""
-        about_text = """
+        try:
+            from update_checker import get_current_version
+            ver = get_current_version() or "—"
+        except Exception:
+            ver = "—"
+        about_text = f"""
         <h2>Calibration Tracker</h2>
-        <p><b>Version:</b> 1.0</p>
+        <p><b>Version:</b> {ver}</p>
         <p>A comprehensive application for managing instrument calibrations, tracking schedules, and maintaining compliance records.</p>
         
         <h3>Features</h3>

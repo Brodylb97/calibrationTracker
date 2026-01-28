@@ -24,6 +24,11 @@ def _last_db_file() -> Path:
     return base / "CalibrationTracker" / "last_db.txt"
 
 
+def _user_fallback_db_path() -> Path:
+    """User-writable path for fallback DB when server or app-dir DB is read-only (e.g. Program Files)."""
+    return _last_db_file().parent / "calibration.db"
+
+
 def get_persisted_last_db_path() -> Path | None:
     """Read last-used DB path from %APPDATA%\\CalibrationTracker\\last_db.txt (or ~/.config on non-Windows). Returns None if missing or invalid."""
     p = _last_db_file()
@@ -103,7 +108,8 @@ def get_connection(db_path: Path | None = None):
         conn = sqlite3.connect(str(db_path), timeout=30.0)  # 30 second timeout for locked database
     except sqlite3.OperationalError as e:
         if "unable to open database file" in str(e) and _path_equal(db_path, DB_PATH):
-            fallback = BASE_DIR / "calibration.db"
+            fallback = _user_fallback_db_path()
+            fallback.parent.mkdir(parents=True, exist_ok=True)
             _effective_db_path = fallback
             conn = sqlite3.connect(str(fallback), timeout=30.0)
         else:
@@ -197,17 +203,19 @@ def initialize_db(conn: sqlite3.Connection, db_path: Path | None = None) -> sqli
         err = str(e).lower()
         if "readonly" not in err and "attempt to write" not in err:
             raise
-        # Only fall back when we're on the default server path (normalized comparison: other PCs may use different slashes)
-        if db_path is not None and not _path_equal(db_path, DB_PATH):
+        # Fall back to user-writable path on any read-only DB (e.g. server, Program Files, or other path)
+        fallback = _user_fallback_db_path()
+        if db_path is not None and _path_equal(db_path, fallback):
+            # Already using user fallback; nothing to try
             raise
-        fallback = BASE_DIR / "calibration.db"
         global _effective_db_path
         import logging
         logging.getLogger(__name__).warning(
-            "Network database is read-only; falling back to local database: %s", fallback
+            "Database is read-only; falling back to user database: %s", fallback
         )
         conn.close()
         _effective_db_path = fallback
+        fallback.parent.mkdir(parents=True, exist_ok=True)
         new_conn = sqlite3.connect(str(fallback), timeout=30.0)
         new_conn.row_factory = sqlite3.Row
         new_conn.execute("PRAGMA foreign_keys = ON")
