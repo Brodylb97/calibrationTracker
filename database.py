@@ -104,6 +104,8 @@ def get_connection(db_path: Path | None = None):
     else:
         if db_path == DB_PATH:
             _effective_db_path = None  # using default (network) successfully
+        else:
+            _effective_db_path = db_path  # explicit path (e.g. --db)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -173,13 +175,43 @@ def seed_default_instrument_types(conn: sqlite3.Connection):
 # Schema initialization
 # -----------------------------------------------------------------------------
 
-def initialize_db(conn: sqlite3.Connection):
+def initialize_db(conn: sqlite3.Connection, db_path: Path | None = None) -> sqlite3.Connection:
     """
     Initialize database schema with optimized indexes and constraints.
     Also performs daily backup if needed.
+    If the database is read-only (e.g. network share without write access) and db_path
+    is the default network path, falls back to local calibration.db and returns that connection.
+    Caller should use the returned connection.
     """
+    try:
+        _initialize_db_core(conn)
+        return conn
+    except sqlite3.OperationalError as e:
+        err = str(e).lower()
+        if "readonly" not in err and "attempt to write" not in err:
+            raise
+        # Only fall back when we're on the default server path (not when user passed a different --db path)
+        if db_path is not None and db_path != DB_PATH:
+            raise
+        fallback = BASE_DIR / "calibration.db"
+        global _effective_db_path
+        import logging
+        logging.getLogger(__name__).warning(
+            "Network database is read-only; falling back to local database: %s", fallback
+        )
+        conn.close()
+        _effective_db_path = fallback
+        new_conn = sqlite3.connect(str(fallback), timeout=30.0)
+        new_conn.row_factory = sqlite3.Row
+        new_conn.execute("PRAGMA foreign_keys = ON")
+        _initialize_db_core(new_conn)
+        return new_conn
+
+
+def _initialize_db_core(conn: sqlite3.Connection) -> None:
+    """Internal: run schema creation and seeding. Raises on readonly."""
     cur = conn.cursor()
-    
+
     # Enable foreign keys and optimize SQLite settings
     cur.execute("PRAGMA foreign_keys = ON")
     cur.execute("PRAGMA journal_mode = WAL")  # Write-Ahead Logging for better concurrency
@@ -446,6 +478,7 @@ def initialize_db(conn: sqlite3.Connection):
     # Indexes for audit log (important for querying history)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts DESC)")
+    conn.commit()
 
 
 # -----------------------------------------------------------------------------

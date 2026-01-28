@@ -1,9 +1,9 @@
 /*
  * RestartHelper.exe - Stub that reopens Calibration Tracker after an update.
  *
- * Reads exe path and --db path from %APPDATA%\CalibrationTracker\restart_params.txt
- * (or from a path given as argv[1]), then launches the main exe with --db and
- * correct working directory so the app reopens on the same database.
+ * Usage:
+ *   RestartHelper.exe <exe_path> [<db_path>]  - use these paths (preferred; avoids APPDATA when updater is elevated)
+ *   RestartHelper.exe [params_file_path]      - read exe path and db path from file (default: %APPDATA%\CalibrationTracker\restart_params.txt)
  *
  * Build (MinGW): gcc -O2 -o RestartHelper.exe restart_helper.c -mwindows
  * Build (MSVC):  cl /O2 restart_helper.c /link /SUBSYSTEM:WINDOWS /OUT:RestartHelper.exe
@@ -40,21 +40,38 @@ static char* dirname_inplace(char* path) {
 }
 
 int main(int argc, char** argv) {
-    char params_path_buf[MAX_PATH];
-    const char* param_path = (argc >= 2) ? argv[1] : default_params_path(params_path_buf, sizeof params_path_buf);
-    if (!param_path) return 1;
-
-    FILE* f = fopen(param_path, "r");
-    if (!f) return 1;
-
     char exe_path[PARAMS_BUF_SIZE];
     char db_path[PARAMS_BUF_SIZE];
-    if (!fgets(exe_path, (int)sizeof exe_path, f)) { fclose(f); return 1; }
-    if (!fgets(db_path, (int)sizeof db_path, f)) { fclose(f); return 1; }
-    fclose(f);
+    exe_path[0] = '\0';
+    db_path[0] = '\0';
 
-    trim_crlf(exe_path);
-    trim_crlf(db_path);
+    /* Prefer explicit args from updater (avoids APPDATA mismatch when updater runs elevated). */
+    if (argc >= 2) {
+        strncpy(exe_path, argv[1], sizeof exe_path - 1);
+        exe_path[sizeof exe_path - 1] = '\0';
+        if (argc >= 3) {
+            strncpy(db_path, argv[2], sizeof db_path - 1);
+            db_path[sizeof db_path - 1] = '\0';
+        }
+    }
+
+    /* If not enough args, read from params file. */
+    if (!exe_path[0]) {
+        char params_path_buf[MAX_PATH];
+        const char* param_path = (argc >= 2) ? argv[1] : default_params_path(params_path_buf, sizeof params_path_buf);
+        if (!param_path) return 1;
+
+        FILE* f = fopen(param_path, "r");
+        if (!f) return 1;
+
+        if (!fgets(exe_path, (int)sizeof exe_path, f)) { fclose(f); return 1; }
+        if (!fgets(db_path, (int)sizeof db_path, f)) { fclose(f); return 1; }
+        fclose(f);
+
+        trim_crlf(exe_path);
+        trim_crlf(db_path);
+    }
+
     if (!exe_path[0]) return 1;
 
     char work_dir[MAX_PATH];

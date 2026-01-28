@@ -46,7 +46,7 @@ def main():
     try:
         conn = get_connection(db_path)
         persist_last_db_path(get_effective_db_path())  # so manual start after update uses same DB
-        initialize_db(conn)  # This now includes daily backup check
+        conn = initialize_db(conn, db_path)  # may fall back to local if network DB is read-only
         repo = CalibrationRepository(conn)
 
         if args.send_reminders:
