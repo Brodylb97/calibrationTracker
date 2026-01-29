@@ -105,6 +105,37 @@ def _make_signature_flowable(filename: str | None, max_h: float = 0.35 * inch, m
     return img
 
 
+def _format_value_for_pdf(v: dict) -> str:
+    """
+    Return display text for a field value in PDF. For bool fields, show Pass/Fail
+    when bool tolerance is used; otherwise Yes/No. Other types return value_text as-is.
+    """
+    data_type = (v.get("data_type") or "").lower()
+    val_text = (v.get("value_text") or "").strip()
+
+    if data_type != "bool":
+        return val_text or "—"
+
+    # Bool: display Pass/Fail or Yes/No instead of 1/0
+    reading_bool = val_text in ("1", "true", "yes", "on")
+    tol_type = (v.get("tolerance_type") or "").lower()
+    if tol_type == "bool":
+        pass_when = (v.get("tolerance_equation") or "true").strip().lower()
+        if pass_when not in ("true", "false"):
+            return "Yes" if reading_bool else "No"
+        try:
+            from tolerance_service import evaluate_pass_fail
+            reading_float = 1.0 if reading_bool else 0.0
+            pass_, _, _ = evaluate_pass_fail(
+                "bool", None, pass_when, 0.0, reading_float,
+                vars_map={}, tolerance_lookup_json=None,
+            )
+            return "Pass" if pass_ else "Fail"
+        except Exception:
+            return "Yes" if reading_bool else "No"
+    return "Yes" if reading_bool else "No"
+
+
 def export_calibration_to_pdf(repo, rec_id: int, output_path: str | Path) -> None:
     """
     Export a single calibration record to a PDF file.
@@ -243,7 +274,10 @@ def export_calibration_to_pdf(repo, rec_id: int, output_path: str | Path) -> Non
                 sig_flowable = _make_signature_flowable(v.get("value_text"))
                 data_cells.append(sig_flowable if sig_flowable else Paragraph("—", table_cell_style))
             else:
-                val_text = (v.get("value_text") or "—").replace("\n", " ")
+                val_text = _format_value_for_pdf(v)
+                if not val_text:
+                    val_text = "—"
+                val_text = val_text.replace("\n", " ")
                 data_cells.append(Paragraph(val_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), table_cell_style))
 
         num_cols = len(header_cells)

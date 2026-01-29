@@ -49,7 +49,12 @@ def backup_database(db_path: Path, backup_dir: Optional[Path] = None,
         backup_conn.close()
         source_conn.close()
         
-        logger.info(f"Database backup created: {backup_path}")
+        # Verify backup: open and run integrity_check
+        verified = verify_backup(backup_path)
+        if not verified:
+            logger.warning(f"Backup integrity check failed: {backup_path}")
+        
+        logger.info(f"Database backup created: {backup_path}" + (" (verified)" if verified else " (unverified)"))
         
         # Clean up old backups
         cleanup_old_backups(backup_dir, max_backups)
@@ -68,6 +73,25 @@ def backup_database(db_path: Path, backup_dir: Optional[Path] = None,
             if backup_path.exists():
                 backup_path.unlink()
             return None
+
+
+def verify_backup(backup_path: Path) -> bool:
+    """
+    Open backup and run PRAGMA integrity_check.
+    Returns True if OK, False on failure or error.
+    """
+    if not backup_path.exists():
+        return False
+    try:
+        conn = sqlite3.connect(str(backup_path))
+        cur = conn.execute("PRAGMA integrity_check")
+        row = cur.fetchone()
+        conn.close()
+        result = row[0] if row else ""
+        return result == "ok"
+    except Exception as e:
+        logger.warning(f"Backup verification error for {backup_path}: {e}")
+        return False
 
 
 def cleanup_old_backups(backup_dir: Path, max_backups: int):

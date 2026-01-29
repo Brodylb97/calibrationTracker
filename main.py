@@ -1,6 +1,7 @@
 # main.py
 
 import argparse
+import os
 import sys
 import sqlite3
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 from database import (
     get_connection,
     initialize_db,
+    run_integrity_check,
     DB_PATH,
     CalibrationRepository,
     get_effective_db_path,
@@ -18,6 +20,59 @@ from database import (
 from ui_main import run_gui
 from crash_log import install_global_excepthook, logger, log_current_exception
 from lan_notify import send_due_reminders_via_lan
+
+
+def _crash_flag_path() -> Path:
+    """Path to crash flag file (previous run may have ended unexpectedly)."""
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+    else:
+        base = Path.home() / ".config"
+    return base / "CalibrationTracker" / "crash_flag.txt"
+
+
+def _crash_flag_exists() -> bool:
+    p = _crash_flag_path()
+    return p.is_file()
+
+
+def _crash_flag_write() -> None:
+    p = _crash_flag_path()
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("1", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _crash_flag_remove() -> None:
+    try:
+        p = _crash_flag_path()
+        if p.is_file():
+            p.unlink()
+    except Exception:
+        pass
+
+
+def _show_crash_recovery_dialog(db_path: Path) -> None:
+    """Offer to run integrity check or open backup folder after possible crash."""
+    try:
+        from PyQt5.QtWidgets import QApplication, QMessageBox
+    except ImportError:
+        return
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+    box = QMessageBox()
+    box.setIcon(QMessageBox.Warning)
+    box.setWindowTitle("Previous run may have ended unexpectedly")
+    box.setText(
+        "The application did not close normally last time. "
+        "You may want to run an integrity check on the database or restore from a backup."
+    )
+    box.setInformativeText(f"Database: {db_path}\nBackups: {db_path.parent / 'backups'}")
+    box.addButton("OK", QMessageBox.AcceptRole)
+    box.exec_()
 
 
 def _is_readonly_db_error(exc: BaseException) -> bool:
@@ -60,13 +115,21 @@ def main():
         "--db",
         type=str,
         default=None,
-        help="Path to server SQLite database (default: last used, or server path)",
+        help="Path to server SQLite database (only the server path is accepted; no local copies)",
     )
 
     args = parser.parse_args()
-    # Only use server database: ignore persisted path unless it is the server path (avoids Program Files from old fallback).
+    # Only the server database is allowed; no local copies.
     persisted = get_persisted_last_db_path()
-    db_path = Path(args.db) if args.db else (persisted if is_server_db_path(persisted) else None) or DB_PATH
+    db_path = None
+    if args.db:
+        p = Path(args.db)
+        if is_server_db_path(p):
+            db_path = p
+        else:
+            logger.warning("Ignoring --db (not server path): %s. Using server database only.", args.db)
+    if db_path is None:
+        db_path = (persisted if is_server_db_path(persisted) else None) or DB_PATH
 
     # Log startup info
     logger.info("Program start. args=%s db=%s", sys.argv, db_path)
@@ -90,6 +153,11 @@ def main():
             persist_last_db_path(get_effective_db_path())
         repo = CalibrationRepository(conn)
 
+        # Crash detection: if flag exists, previous run may have ended unexpectedly
+        if _crash_flag_exists():
+            _show_crash_recovery_dialog(get_effective_db_path())
+        _crash_flag_write()
+
         if args.send_reminders:
             logger.info("Running in headless mode: send LAN reminders")
             count = send_due_reminders_via_lan(repo)
@@ -100,9 +168,19 @@ def main():
             )
             print(msg)
             logger.info(msg)
+            try:
+                conn.close()
+            except Exception:
+                pass
+            _crash_flag_remove()
         else:
             logger.info("Starting GUI mode")
             run_gui(repo)
+            try:
+                conn.close()
+            except Exception:
+                pass
+            _crash_flag_remove()
 
         logger.info("Program exit normally")
 

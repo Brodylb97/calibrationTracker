@@ -49,7 +49,7 @@ def persist_last_db_path(path: Path) -> None:
 
 # Default DB path: shared network location
 SERVER_DB_PATH = Path(
-    r"Z:\Shared\Laboratory\Particulate Matter and Other Results\Brody's Project Junk\Cal Tracker\calibration.db"
+    r"Z:\Shared\Laboratory\Particulate Matter and Other Results\Brody's Project Junk\Cal Tracker Current\calibration.db"
 )
 
 
@@ -96,16 +96,22 @@ def get_attachments_dir() -> Path:
 # Connection helpers
 # -----------------------------------------------------------------------------
 
-def get_connection(db_path: Path | None = None):
+def get_connection(db_path: Path | None = None, timeout: float = 30.0):
     """
-    Connect to the server database only. No fallback to local or user DB.
-    Raises on open failure (e.g. server unavailable) or if the database is read-only.
+    Connect to the server database only. No local copies; only the server path is allowed.
+    Raises ValueError if db_path is not the server path. Raises on open failure or read-only.
+    timeout: seconds to wait for locks (use a shorter value for UI-triggered reconnect).
     """
     global _effective_db_path
     if db_path is None:
         db_path = DB_PATH
+    if not is_server_db_path(db_path):
+        raise ValueError(
+            f"Only the server database is allowed. Path '{db_path}' is not the server path. "
+            "Local copies are not used."
+        )
     _effective_db_path = db_path
-    conn = sqlite3.connect(str(db_path), timeout=30.0)
+    conn = sqlite3.connect(str(db_path), timeout=timeout)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -175,13 +181,32 @@ def seed_default_instrument_types(conn: sqlite3.Connection):
 # Schema initialization
 # -----------------------------------------------------------------------------
 
+def run_integrity_check(conn: sqlite3.Connection) -> str | None:
+    """
+    Run PRAGMA integrity_check. Returns None if OK, or an error message string if failed.
+    """
+    cur = conn.execute("PRAGMA integrity_check")
+    row = cur.fetchone()
+    if row is None:
+        return None
+    result = row[0] if hasattr(row, "__getitem__") else str(row)
+    if result == "ok":
+        return None
+    return result
+
+
 def initialize_db(conn: sqlite3.Connection, db_path: Path | None = None) -> sqlite3.Connection:
     """
     Initialize database schema and seed defaults. No fallback; app uses server DB only.
     On read-only error, raises with a clear message so the user can fix server/share permissions.
+    Runs integrity check after init; on failure logs a warning (does not block startup).
     """
     try:
         _initialize_db_core(conn)
+        err = run_integrity_check(conn)
+        if err:
+            import logging
+            logging.getLogger(__name__).warning("Database integrity check failed: %s", err)
         return conn
     except sqlite3.OperationalError as e:
         err = str(e).lower()
@@ -235,7 +260,7 @@ def _initialize_db_core(conn: sqlite3.Connection) -> None:
             last_cal_date TEXT,
             next_due_date TEXT NOT NULL,
             frequency_months INTEGER,
-            status TEXT DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'RETIRED', 'INACTIVE')),
+            status TEXT DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'RETIRED', 'INACTIVE', 'OUT_FOR_CAL')),
             notes TEXT,
             instrument_type_id INTEGER,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -430,23 +455,7 @@ def _initialize_db_core(conn: sqlite3.Connection) -> None:
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cal_values_field_id ON calibration_values(field_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_cal_values_record_field ON calibration_values(record_id, field_id)")
 
-    conn.commit()
-    get_attachments_dir().mkdir(parents=True, exist_ok=True)
-    seed_default_instrument_types(conn)
-    
-    # Perform daily backup if needed (import here to avoid circular dependency)
-    try:
-        from database_backup import perform_daily_backup_if_needed
-        perform_daily_backup_if_needed(get_effective_db_path(), max_backups=30)
-    except ImportError:
-        # database_backup module not available, skip backup
-        pass
-    except Exception as e:
-        # Don't fail initialization if backup fails
-        import logging
-        logging.getLogger(__name__).warning(f"Daily backup check failed: {e}")
-    
-    # Audit log: instruments & calibrations
+    # Audit log: instruments & calibrations (must exist before migrations)
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS audit_log (
@@ -465,6 +474,40 @@ def _initialize_db_core(conn: sqlite3.Connection) -> None:
     # Indexes for audit log (important for querying history)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts DESC)")
+    # Ensure reason column exists (migration 1 adds it; this handles pre-migration or version skip)
+    cur.execute("PRAGMA table_info(audit_log)")
+    audit_cols = [r[1] for r in cur.fetchall()]
+    if "reason" not in audit_cols:
+        cur.execute("ALTER TABLE audit_log ADD COLUMN reason TEXT")
+    conn.commit()
+
+    # Schema version and migrations (run after core tables including audit_log)
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)"
+    )
+    conn.commit()
+    try:
+        from migrations import run_migrations
+        run_migrations(conn)
+    except ImportError:
+        pass
+
+    conn.commit()
+    get_attachments_dir().mkdir(parents=True, exist_ok=True)
+    seed_default_instrument_types(conn)
+    
+    # Perform daily backup if needed (import here to avoid circular dependency)
+    try:
+        from database_backup import perform_daily_backup_if_needed
+        perform_daily_backup_if_needed(get_effective_db_path(), max_backups=30)
+    except ImportError:
+        # database_backup module not available, skip backup
+        pass
+    except Exception as e:
+        # Don't fail initialization if backup fails
+        import logging
+        logging.getLogger(__name__).warning(f"Daily backup check failed: {e}")
+    
     conn.commit()
 
 
@@ -487,17 +530,20 @@ class CalibrationRepository:
     def log_audit(self, entity_type: str, entity_id: int, action: str,
                   field: str | None = None,
                   old_value: str | None = None,
-                  new_value: str | None = None):
+                  new_value: str | None = None,
+                  reason: str | None = None,
+                  _commit: bool = True):
         actor = self._get_actor()
         self.conn.execute(
             """
             INSERT INTO audit_log
-                (entity_type, entity_id, action, field, old_value, new_value, actor)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (entity_type, entity_id, action, field, old_value, new_value, actor, reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (entity_type, entity_id, action, field, old_value, new_value, actor),
+            (entity_type, entity_id, action, field, old_value, new_value, actor, reason),
         )
-        self.conn.commit()
+        if _commit:
+            self.conn.commit()
 
     def get_audit_for_instrument(self, instrument_id: int):
         cur = self.conn.execute(
@@ -550,48 +596,173 @@ class CalibrationRepository:
         self.conn.commit()
     
     
-    def delete_calibration_record(self, record_id: int):
+    def delete_calibration_record(self, record_id: int, reason: str | None = None):
         rec = self.get_calibration_record(record_id)
         if not rec:
             return
         cur = self.conn.cursor()
-        cur.execute(
-            "DELETE FROM calibration_values WHERE record_id = ?",
-            (record_id,),
-        )
-        cur.execute(
-            "DELETE FROM calibration_records WHERE id = ?",
-            (record_id,),
-        )
-        self.conn.commit()
-
-        self.log_audit(
-            "calibration",
-            record_id,
-            "delete",
-            field=None,
-            old_value=str(rec),
-            new_value=None,
-        )
+        try:
+            cur.execute("BEGIN")
+            cur.execute(
+                "DELETE FROM calibration_values WHERE record_id = ?",
+                (record_id,),
+            )
+            cur.execute(
+                "DELETE FROM calibration_records WHERE id = ?",
+                (record_id,),
+            )
+            self.log_audit(
+                "calibration",
+                record_id,
+                "delete",
+                field=None,
+                old_value=str(rec),
+                new_value=None,
+                reason=reason,
+                _commit=False,
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     # ---------- Delete instrument ----------
 
-    def delete_instrument(self, instrument_id: int):
-        """Delete an instrument (and its attachments)."""
+    def delete_instrument(self, instrument_id: int, reason: str | None = None):
+        """Hard-delete an instrument (and its attachments). For soft delete use archive_instrument."""
         cur = self.conn.cursor()
+        old = self.get_instrument(instrument_id)
         try:
+            cur.execute("BEGIN")
             cur.execute(
                 "DELETE FROM attachments WHERE instrument_id = ?",
                 (instrument_id,),
             )
+            cur.execute(
+                "DELETE FROM instruments WHERE id = ?",
+                (instrument_id,),
+            )
+            if old:
+                self.log_audit(
+                    "instrument",
+                    instrument_id,
+                    "delete",
+                    field=None,
+                    old_value=str(old),
+                    new_value=None,
+                    reason=reason,
+                    _commit=False,
+                )
+            self.conn.commit()
         except Exception:
-            pass
+            self.conn.rollback()
+            raise
 
-        cur.execute(
-            "DELETE FROM instruments WHERE id = ?",
-            (instrument_id,),
-        )
-        self.conn.commit()
+    def batch_update_instruments(self, instrument_ids: list[int], updates: dict,
+                                  reason: str | None = None) -> int:
+        """
+        Apply the same field updates to multiple instruments in one transaction.
+        updates: dict with only keys to change, e.g. {"status": "ACTIVE"} or {"next_due_date": "2025-12-31"}.
+        Returns number of instruments updated.
+        """
+        if not instrument_ids or not updates:
+            return 0
+        allowed = {"status", "next_due_date", "last_cal_date", "notes", "instrument_type_id"}
+        updates = {k: v for k, v in updates.items() if k in allowed}
+        if not updates:
+            return 0
+        cur = self.conn.cursor()
+        try:
+            cur.execute("BEGIN")
+            old_by_id = {iid: self.get_instrument(iid) for iid in instrument_ids}
+            set_parts = ["updated_at = CURRENT_TIMESTAMP"]
+            params = []
+            for k, v in updates.items():
+                set_parts.append(f"{k} = ?")
+                params.append(v)
+            placeholders = ",".join("?" * len(instrument_ids))
+            sql = f"UPDATE instruments SET {', '.join(set_parts)} WHERE id IN ({placeholders})"
+            cur.execute(sql, params + instrument_ids)
+            for iid in instrument_ids:
+                old = old_by_id.get(iid)
+                if old:
+                    for fld in updates:
+                        if str(old.get(fld)) != str(updates.get(fld)):
+                            self.log_audit(
+                                "instrument",
+                                iid,
+                                "batch_update",
+                                field=fld,
+                                old_value=str(old.get(fld)) if old.get(fld) is not None else None,
+                                new_value=str(updates.get(fld)) if updates.get(fld) is not None else None,
+                                reason=reason,
+                                _commit=False,
+                            )
+            self.conn.commit()
+            return len(instrument_ids)
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def archive_instrument(self, instrument_id: int, deleted_by: str | None = None,
+                          reason: str | None = None) -> None:
+        """Soft-delete (archive) an instrument. List methods exclude archived by default."""
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(instruments)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "deleted_at" not in cols:
+            raise RuntimeError("Schema migration 2 required for archive (deleted_at column)")
+        actor = deleted_by or self._get_actor()
+        try:
+            cur.execute("BEGIN")
+            cur.execute(
+                "UPDATE instruments SET deleted_at = datetime('now'), deleted_by = ? WHERE id = ?",
+                (actor, instrument_id),
+            )
+            self.log_audit(
+                "instrument",
+                instrument_id,
+                "archive",
+                field="deleted_at",
+                old_value=None,
+                new_value="archived",
+                reason=reason,
+                _commit=False,
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def archive_calibration_record(self, record_id: int, deleted_by: str | None = None,
+                                   reason: str | None = None) -> None:
+        """Soft-delete (archive) a calibration record. List methods exclude archived by default."""
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(calibration_records)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "deleted_at" not in cols:
+            raise RuntimeError("Schema migration 2 required for archive (deleted_at column)")
+        actor = deleted_by or self._get_actor()
+        try:
+            cur.execute("BEGIN")
+            cur.execute(
+                "UPDATE calibration_records SET deleted_at = datetime('now'), deleted_by = ? WHERE id = ?",
+                (actor, record_id),
+            )
+            self.log_audit(
+                "calibration",
+                record_id,
+                "archive",
+                field="deleted_at",
+                old_value=None,
+                new_value="archived",
+                reason=reason,
+                _commit=False,
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     # ---------------- Instrument types ----------------
 
@@ -616,6 +787,96 @@ class CalibrationRepository:
         )
         row = cur.fetchone()
         return dict(row) if row else None
+
+    # ---------------- Personnel (M7) ----------------
+
+    def _personnel_table_exists(self) -> bool:
+        cur = self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='personnel'"
+        )
+        return cur.fetchone() is not None
+
+    def list_personnel(self, active_only: bool = True):
+        if not self._personnel_table_exists():
+            return []
+        sql = "SELECT id, name, role, qualifications, review_expiry, active FROM personnel ORDER BY name ASC"
+        if active_only:
+            sql = "SELECT id, name, role, qualifications, review_expiry, active FROM personnel WHERE active = 1 ORDER BY name ASC"
+        cur = self.conn.execute(sql)
+        return [dict(r) for r in cur.fetchall()]
+
+    def get_personnel(self, person_id: int):
+        if not self._personnel_table_exists():
+            return None
+        cur = self.conn.execute("SELECT * FROM personnel WHERE id = ?", (person_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def add_personnel(self, name: str, role: str = "", qualifications: str = "",
+                      review_expiry: str | None = None, active: bool = True) -> int:
+        cur = self.conn.execute(
+            """
+            INSERT INTO personnel (name, role, qualifications, review_expiry, active)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (name.strip(), role.strip(), qualifications.strip(), review_expiry, 1 if active else 0),
+        )
+        self.conn.commit()
+        return cur.lastrowid
+
+    def update_personnel(self, person_id: int, name: str, role: str = "", qualifications: str = "",
+                         review_expiry: str | None = None, active: bool = True):
+        self.conn.execute(
+            """
+            UPDATE personnel
+            SET name = ?, role = ?, qualifications = ?, review_expiry = ?, active = ?,
+                updated_at = datetime('now')
+            WHERE id = ?
+            """,
+            (name.strip(), role.strip(), qualifications.strip(), review_expiry, 1 if active else 0, person_id),
+        )
+        self.conn.commit()
+
+    def delete_personnel(self, person_id: int):
+        self.conn.execute("DELETE FROM calibration_template_personnel WHERE person_id = ?", (person_id,))
+        self.conn.execute("DELETE FROM personnel WHERE id = ?", (person_id,))
+        self.conn.commit()
+
+    def list_personnel_authorized_for_template(self, template_id: int):
+        """Personnel authorized to perform this template (for Performed by dropdown)."""
+        if not self._personnel_table_exists():
+            return []
+        cur = self.conn.execute(
+            """
+            SELECT p.id, p.name, p.role
+            FROM personnel p
+            JOIN calibration_template_personnel ctp ON ctp.person_id = p.id
+            WHERE ctp.template_id = ? AND p.active = 1
+            ORDER BY p.name ASC
+            """,
+            (template_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def set_template_authorized_personnel(self, template_id: int, person_ids: list[int]):
+        """Set which personnel are authorized to perform this template."""
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM calibration_template_personnel WHERE template_id = ?", (template_id,))
+        for pid in person_ids or []:
+            cur.execute(
+                "INSERT INTO calibration_template_personnel (template_id, person_id) VALUES (?, ?)",
+                (template_id, pid),
+            )
+        self.conn.commit()
+
+    def get_template_authorized_person_ids(self, template_id: int) -> list[int]:
+        if not self._personnel_table_exists():
+            return []
+        cur = self.conn.execute(
+            "SELECT person_id FROM calibration_template_personnel WHERE template_id = ?",
+            (template_id,),
+        )
+        return [r[0] for r in cur.fetchall()]
 
     # ---------------- Calibration templates ----------------
 
@@ -654,28 +915,64 @@ class CalibrationRepository:
     
     def create_template(self, instrument_type_id: int, name: str,
                         version: int = 1, is_active: bool = True,
-                        notes: str = "") -> int:
-        cur = self.conn.execute(
-            """
-            INSERT INTO calibration_templates
-                (instrument_type_id, name, version, is_active, notes)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (instrument_type_id, name, version, 1 if is_active else 0, notes),
-        )
+                        notes: str = "",
+                        effective_date: str | None = None,
+                        change_reason: str | None = None,
+                        status: str | None = None) -> int:
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(calibration_templates)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "effective_date" in cols and "change_reason" in cols and "status" in cols:
+            cur.execute(
+                """
+                INSERT INTO calibration_templates
+                    (instrument_type_id, name, version, is_active, notes,
+                     effective_date, change_reason, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (instrument_type_id, name, version, 1 if is_active else 0, notes,
+                 effective_date, change_reason, status or "Draft"),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO calibration_templates
+                    (instrument_type_id, name, version, is_active, notes)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (instrument_type_id, name, version, 1 if is_active else 0, notes),
+            )
         self.conn.commit()
         return cur.lastrowid
 
     def update_template(self, template_id: int, name: str,
-                        version: int, is_active: bool, notes: str):
-        self.conn.execute(
-            """
-            UPDATE calibration_templates
-            SET name = ?, version = ?, is_active = ?, notes = ?
-            WHERE id = ?
-            """,
-            (name, version, 1 if is_active else 0, notes, template_id),
-        )
+                        version: int, is_active: bool, notes: str,
+                        effective_date: str | None = None,
+                        change_reason: str | None = None,
+                        status: str | None = None):
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(calibration_templates)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "effective_date" in cols and "change_reason" in cols and "status" in cols:
+            cur.execute(
+                """
+                UPDATE calibration_templates
+                SET name = ?, version = ?, is_active = ?, notes = ?,
+                    effective_date = ?, change_reason = ?, status = ?
+                WHERE id = ?
+                """,
+                (name, version, 1 if is_active else 0, notes,
+                 effective_date, change_reason, status, template_id),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE calibration_templates
+                SET name = ?, version = ?, is_active = ?, notes = ?
+                WHERE id = ?
+                """,
+                (name, version, 1 if is_active else 0, notes, template_id),
+            )
         self.conn.commit()
 
     def delete_template(self, template_id: int):
@@ -716,36 +1013,110 @@ class CalibrationRepository:
         calc_ref2_name: str | None = None,
         tolerance: float | None = None,
         autofill_from_first_group: bool = False,
+        default_value: str | None = None,
+        tolerance_type: str | None = None,
+        tolerance_equation: str | None = None,
+        nominal_value: str | None = None,
+        tolerance_lookup_json: str | None = None,
     ) -> int:
         """
         Insert a new template field. Safe for both normal and computed fields.
+        tolerance_type: 'fixed' | 'percent' | 'equation' | 'lookup' | None (legacy fixed).
         """
-        cur = self.conn.execute(
-            """
-            INSERT INTO calibration_template_fields
-                (template_id, name, label, data_type, unit,
-                 required, sort_order, group_name,
-                 calc_type, calc_ref1_name, calc_ref2_name,
-                 tolerance, autofill_from_first_group, default_value)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                template_id,
-                name,
-                label,
-                data_type,
-                unit,
-                1 if required else 0,
-                sort_order,
-                group_name,
-                calc_type,
-                calc_ref1_name,
-                calc_ref2_name,
-                tolerance,
-                1 if autofill_from_first_group else 0,
-                None,  # default_value will be set via update if needed
-            ),
-        )
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(calibration_template_fields)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "tolerance_type" in cols:
+            if "tolerance_lookup_json" in cols:
+                cur.execute(
+                    """
+                    INSERT INTO calibration_template_fields
+                        (template_id, name, label, data_type, unit,
+                         required, sort_order, group_name,
+                         calc_type, calc_ref1_name, calc_ref2_name,
+                         tolerance, autofill_from_first_group, default_value,
+                         tolerance_type, tolerance_equation, nominal_value, tolerance_lookup_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        template_id,
+                        name,
+                        label,
+                        data_type,
+                        unit,
+                        1 if required else 0,
+                        sort_order,
+                        group_name,
+                        calc_type,
+                        calc_ref1_name,
+                        calc_ref2_name,
+                        tolerance,
+                        1 if autofill_from_first_group else 0,
+                        default_value,
+                        tolerance_type,
+                        tolerance_equation,
+                        nominal_value,
+                        tolerance_lookup_json,
+                    ),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO calibration_template_fields
+                        (template_id, name, label, data_type, unit,
+                         required, sort_order, group_name,
+                         calc_type, calc_ref1_name, calc_ref2_name,
+                         tolerance, autofill_from_first_group, default_value,
+                         tolerance_type, tolerance_equation, nominal_value)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        template_id,
+                        name,
+                        label,
+                        data_type,
+                        unit,
+                        1 if required else 0,
+                        sort_order,
+                        group_name,
+                        calc_type,
+                        calc_ref1_name,
+                        calc_ref2_name,
+                        tolerance,
+                        1 if autofill_from_first_group else 0,
+                        default_value,
+                        tolerance_type,
+                        tolerance_equation,
+                        nominal_value,
+                    ),
+                )
+        else:
+            cur.execute(
+                """
+                INSERT INTO calibration_template_fields
+                    (template_id, name, label, data_type, unit,
+                     required, sort_order, group_name,
+                     calc_type, calc_ref1_name, calc_ref2_name,
+                     tolerance, autofill_from_first_group, default_value)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    template_id,
+                    name,
+                    label,
+                    data_type,
+                    unit,
+                    1 if required else 0,
+                    sort_order,
+                    group_name,
+                    calc_type,
+                    calc_ref1_name,
+                    calc_ref2_name,
+                    tolerance,
+                    1 if autofill_from_first_group else 0,
+                    default_value,
+                ),
+            )
         self.conn.commit()
         return cur.lastrowid
 
@@ -753,40 +1124,51 @@ class CalibrationRepository:
         """
         Update an existing template field. `data` should match get_data() from FieldEditDialog.
         """
-        self.conn.execute(
-            """
-            UPDATE calibration_template_fields
-            SET name           = :name,
-                label          = :label,
-                data_type      = :data_type,
-                unit           = :unit,
-                required       = :required,
-                sort_order     = :sort_order,
-                group_name     = :group_name,
-                calc_type      = :calc_type,
-                calc_ref1_name = :calc_ref1_name,
-                calc_ref2_name = :calc_ref2_name,
-                tolerance      = :tolerance,
-                autofill_from_first_group = :autofill_from_first_group,
-                default_value  = :default_value
-            WHERE id = :id
-            """,
-            {
-                "id": field_id,
-                "name": data["name"],
-                "label": data["label"],
-                "data_type": data["data_type"],
-                "unit": data.get("unit"),
-                "required": 1 if data.get("required") else 0,
-                "sort_order": data.get("sort_order", 0),
-                "group_name": data.get("group_name"),
-                "calc_type": data.get("calc_type"),
-                "calc_ref1_name": data.get("calc_ref1_name"),
-                "calc_ref2_name": data.get("calc_ref2_name"),
-                "tolerance": data.get("tolerance"),
-                "autofill_from_first_group": 1 if data.get("autofill_from_first_group") else 0,
-                "default_value": data.get("default_value"),
-            },
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(calibration_template_fields)")
+        cols = [r[1] for r in cur.fetchall()]
+        set_clause = """
+            name = :name,
+            label = :label,
+            data_type = :data_type,
+            unit = :unit,
+            required = :required,
+            sort_order = :sort_order,
+            group_name = :group_name,
+            calc_type = :calc_type,
+            calc_ref1_name = :calc_ref1_name,
+            calc_ref2_name = :calc_ref2_name,
+            tolerance = :tolerance,
+            autofill_from_first_group = :autofill_from_first_group,
+            default_value = :default_value
+        """
+        params = {
+            "id": field_id,
+            "name": data["name"],
+            "label": data["label"],
+            "data_type": data["data_type"],
+            "unit": data.get("unit"),
+            "required": 1 if data.get("required") else 0,
+            "sort_order": data.get("sort_order", 0),
+            "group_name": data.get("group_name"),
+            "calc_type": data.get("calc_type"),
+            "calc_ref1_name": data.get("calc_ref1_name"),
+            "calc_ref2_name": data.get("calc_ref2_name"),
+            "tolerance": data.get("tolerance"),
+            "autofill_from_first_group": 1 if data.get("autofill_from_first_group") else 0,
+            "default_value": data.get("default_value"),
+        }
+        if "tolerance_type" in cols:
+            set_clause += ", tolerance_type = :tolerance_type, tolerance_equation = :tolerance_equation, nominal_value = :nominal_value"
+            params["tolerance_type"] = data.get("tolerance_type")
+            params["tolerance_equation"] = data.get("tolerance_equation")
+            params["nominal_value"] = data.get("nominal_value")
+        if "tolerance_lookup_json" in cols:
+            set_clause += ", tolerance_lookup_json = :tolerance_lookup_json"
+            params["tolerance_lookup_json"] = data.get("tolerance_lookup_json")
+        cur.execute(
+            f"UPDATE calibration_template_fields SET {set_clause} WHERE id = :id",
+            params,
         )
         self.conn.commit()
 
@@ -800,27 +1182,31 @@ class CalibrationRepository:
 
     # ---------------- Calibration records ----------------
 
-    def list_calibration_records_for_instrument(self, instrument_id: int):
-        cur = self.conn.execute(
-            """
+    def list_calibration_records_for_instrument(self, instrument_id: int,
+                                                 include_archived: bool = False):
+        sql = """
             SELECT r.*,
                    t.name AS template_name
             FROM calibration_records r
             JOIN calibration_templates t ON r.template_id = t.id
             WHERE r.instrument_id = ?
-            ORDER BY r.cal_date DESC, r.id DESC
-            """,
-            (instrument_id,),
-        )
+            """
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(calibration_records)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "deleted_at" in cols and not include_archived:
+            sql += " AND (r.deleted_at IS NULL OR r.deleted_at = '')"
+        sql += " ORDER BY r.cal_date DESC, r.id DESC"
+        cur = self.conn.execute(sql, (instrument_id,))
         return [dict(r) for r in cur.fetchall()]
     
-    def list_all_calibration_records(self):
+    def list_all_calibration_records(self, include_archived: bool = False):
         """
         Get all calibration records with instrument and instrument type information.
         Returns list of dicts with record, instrument, and instrument_type data.
+        Excludes archived records unless include_archived=True.
         """
-        cur = self.conn.execute(
-            """
+        sql = """
             SELECT r.*,
                    i.tag_number,
                    i.serial_number,
@@ -831,9 +1217,14 @@ class CalibrationRepository:
             FROM calibration_records r
             JOIN instruments i ON r.instrument_id = i.id
             LEFT JOIN instrument_types it ON i.instrument_type_id = it.id
-            ORDER BY it.name ASC, i.tag_number ASC, r.cal_date DESC
-            """,
-        )
+            """
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(calibration_records)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "deleted_at" in cols and not include_archived:
+            sql += " WHERE (r.deleted_at IS NULL OR r.deleted_at = '')"
+        sql += " ORDER BY it.name ASC, i.tag_number ASC, r.cal_date DESC"
+        cur = self.conn.execute(sql)
         return [dict(r) for r in cur.fetchall()]
 
     def get_calibration_record(self, record_id: int):
@@ -863,7 +1254,15 @@ class CalibrationRepository:
         return dict(row) if row else None
 
     def get_calibration_values(self, record_id: int):
-        cur = self.conn.execute(
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(calibration_template_fields)")
+        field_cols = {r[1] for r in cur.fetchall()}
+        extra = []
+        for col in ("tolerance_type", "tolerance_equation", "nominal_value", "tolerance_lookup_json"):
+            if col in field_cols:
+                extra.append(f"f.{col}")
+        extra_sql = ", " + ", ".join(extra) if extra else ""
+        cur.execute(
             """
             SELECT v.*,
                 f.name AS field_name,
@@ -875,6 +1274,7 @@ class CalibrationRepository:
                 f.calc_ref1_name,
                 f.calc_ref2_name,
                 f.tolerance
+                """ + extra_sql + """
             FROM calibration_values v
             JOIN calibration_template_fields f ON v.field_id = f.id
             WHERE v.record_id = ?
@@ -887,73 +1287,149 @@ class CalibrationRepository:
     def create_calibration_record(self, instrument_id: int, template_id: int,
                                   cal_date: str, performed_by: str,
                                   result: str, notes: str,
-                                  field_values: dict[int, str]) -> int:
+                                  field_values: dict[int, str],
+                                  template_version: int | None = None) -> int:
         """
         field_values: dict[field_id] = value_text
+        template_version: version of template at time of calibration (H4 audit trail).
         """
         cur = self.conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO calibration_records
-                (instrument_id, template_id, cal_date, performed_by, result, notes)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (instrument_id, template_id, cal_date, performed_by, result, notes),
-        )
-        rec_id = cur.lastrowid
+        try:
+            cur.execute("BEGIN")
+            cur.execute("PRAGMA table_info(calibration_records)")
+            cols = [r[1] for r in cur.fetchall()]
+            if "template_version" in cols:
+                cur.execute(
+                    """
+                    INSERT INTO calibration_records
+                        (instrument_id, template_id, cal_date, performed_by, result, notes, template_version)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (instrument_id, template_id, cal_date, performed_by, result, notes, template_version),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO calibration_records
+                        (instrument_id, template_id, cal_date, performed_by, result, notes)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (instrument_id, template_id, cal_date, performed_by, result, notes),
+                )
+            rec_id = cur.lastrowid
 
-        for field_id, val in field_values.items():
-            cur.execute(
-                """
-                INSERT INTO calibration_values (record_id, field_id, value_text)
-                VALUES (?, ?, ?)
-                """,
-                (rec_id, field_id, str(val) if val is not None else None),
+            for field_id, val in field_values.items():
+                cur.execute(
+                    """
+                    INSERT INTO calibration_values (record_id, field_id, value_text)
+                    VALUES (?, ?, ?)
+                    """,
+                    (rec_id, field_id, str(val) if val is not None else None),
+                )
+
+            self.log_audit(
+                "calibration",
+                rec_id,
+                "create",
+                field=None,
+                old_value=None,
+                new_value=f"instrument_id={instrument_id}, template_id={template_id}",
+                _commit=False,
             )
-
-        self.conn.commit()
-        
-        # audit
-        self.log_audit(
-            "calibration",
-            rec_id,
-            "create",
-            field=None,
-            old_value=None,
-            new_value=f"instrument_id={instrument_id}, template_id={template_id}",
-        )
-
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return rec_id
 
     def update_calibration_record(self, record_id: int, cal_date: str,
                                   performed_by: str, result: str, notes: str,
                                   field_values: dict[int, str]):
         cur = self.conn.cursor()
-        cur.execute(
-            """
-            UPDATE calibration_records
-            SET cal_date = ?, performed_by = ?, result = ?, notes = ?,
-                updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (cal_date, performed_by, result, notes, record_id),
-        )
-
-        cur.execute(
-            "DELETE FROM calibration_values WHERE record_id = ?",
-            (record_id,),
-        )
-
-        for field_id, val in field_values.items():
+        try:
+            cur.execute("BEGIN")
             cur.execute(
                 """
-                INSERT INTO calibration_values (record_id, field_id, value_text)
-                VALUES (?, ?, ?)
+                UPDATE calibration_records
+                SET cal_date = ?, performed_by = ?, result = ?, notes = ?,
+                    updated_at = datetime('now')
+                WHERE id = ?
                 """,
-                (record_id, field_id, str(val) if val is not None else None),
+                (cal_date, performed_by, result, notes, record_id),
             )
 
-        self.conn.commit()
+            cur.execute(
+                "DELETE FROM calibration_values WHERE record_id = ?",
+                (record_id,),
+            )
+
+            for field_id, val in field_values.items():
+                cur.execute(
+                    """
+                    INSERT INTO calibration_values (record_id, field_id, value_text)
+                    VALUES (?, ?, ?)
+                    """,
+                    (record_id, field_id, str(val) if val is not None else None),
+                )
+
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def set_record_state(self, record_id: int, state: str,
+                         reviewed_by: str | None = None,
+                         approved_by: str | None = None,
+                         reason: str | None = None) -> None:
+        """
+        Set calibration record state: Draft, Reviewed, Approved, Archived.
+        For Reviewed set reviewed_by and reviewed_at; for Approved set approved_by and approved_at.
+        """
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(calibration_records)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "record_state" not in cols:
+            raise RuntimeError("Schema migration 3 required for record_state")
+        actor = self._get_actor()
+        try:
+            cur.execute("BEGIN")
+            if state == "Reviewed":
+                cur.execute(
+                    """UPDATE calibration_records
+                       SET record_state = ?, reviewed_by = ?, reviewed_at = datetime('now')
+                       WHERE id = ?""",
+                    (state, reviewed_by or actor, record_id),
+                )
+            elif state == "Approved":
+                cur.execute(
+                    """UPDATE calibration_records
+                       SET record_state = ?, approved_by = ?, approved_at = datetime('now')
+                       WHERE id = ?
+                    """,
+                    (state, approved_by or actor, record_id),
+                )
+            elif state in ("Draft", "Archived"):
+                cur.execute(
+                    "UPDATE calibration_records SET record_state = ? WHERE id = ?",
+                    (state, record_id),
+                )
+            else:
+                self.conn.rollback()
+                raise ValueError(f"Invalid record_state: {state}")
+            self.log_audit(
+                "calibration",
+                record_id,
+                "set_state",
+                field="record_state",
+                old_value=None,
+                new_value=state,
+                reason=reason,
+                _commit=False,
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     # ---------- Settings ----------
 
@@ -1050,7 +1526,7 @@ class CalibrationRepository:
 
     # ---------- Instruments ----------
 
-    def list_instruments(self):
+    def list_instruments(self, include_archived: bool = False):
         query = """
         SELECT i.id,
                i.tag_number,
@@ -1065,6 +1541,7 @@ class CalibrationRepository:
                i.status,
                i.notes,
                i.instrument_type_id,
+               i.updated_at,
                d.name  AS destination_name,
                it.name AS instrument_type_name
         FROM instruments i
@@ -1072,9 +1549,81 @@ class CalibrationRepository:
                ON i.destination_id = d.id
         LEFT JOIN instrument_types it
                ON i.instrument_type_id = it.id
-        ORDER BY date(i.next_due_date) ASC, i.tag_number
         """
+        # Exclude archived unless requested (requires migration 2 columns)
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(instruments)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "deleted_at" in cols and not include_archived:
+            query += " WHERE (i.deleted_at IS NULL OR i.deleted_at = '')"
+        query += " ORDER BY date(i.next_due_date) ASC, i.tag_number"
         cur = self.conn.execute(query)
+        return [dict(r) for r in cur.fetchall()]
+
+    def get_overdue_instruments(self, include_archived: bool = False):
+        """Instruments with next_due_date < today, ACTIVE, not archived."""
+        today = date.today().isoformat()
+        sql = """
+            SELECT i.id, i.tag_number, i.next_due_date, i.status, i.updated_at,
+                   d.name AS destination_name, it.name AS instrument_type_name
+            FROM instruments i
+            LEFT JOIN destinations d ON i.destination_id = d.id
+            LEFT JOIN instrument_types it ON i.instrument_type_id = it.id
+            WHERE i.status = 'ACTIVE'
+              AND i.next_due_date IS NOT NULL
+              AND date(i.next_due_date) < date(?)
+            """
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(instruments)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "deleted_at" in cols and not include_archived:
+            sql += " AND (i.deleted_at IS NULL OR i.deleted_at = '')"
+        sql += " ORDER BY i.next_due_date ASC, i.tag_number"
+        cur = self.conn.execute(sql, (today,))
+        return [dict(r) for r in cur.fetchall()]
+
+    def get_due_soon_instruments(self, days: int, include_archived: bool = False):
+        """Instruments due within [today, today + days], ACTIVE."""
+        today = date.today()
+        upper = (today + timedelta(days=days)).isoformat()
+        today_str = today.isoformat()
+        sql = """
+            SELECT i.id, i.tag_number, i.next_due_date, i.status, i.updated_at,
+                   d.name AS destination_name, it.name AS instrument_type_name
+            FROM instruments i
+            LEFT JOIN destinations d ON i.destination_id = d.id
+            LEFT JOIN instrument_types it ON i.instrument_type_id = it.id
+            WHERE i.status = 'ACTIVE'
+              AND i.next_due_date IS NOT NULL
+              AND date(i.next_due_date) >= date(?)
+              AND date(i.next_due_date) <= date(?)
+            """
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(instruments)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "deleted_at" in cols and not include_archived:
+            sql += " AND (i.deleted_at IS NULL OR i.deleted_at = '')"
+        sql += " ORDER BY i.next_due_date ASC, i.tag_number"
+        cur = self.conn.execute(sql, (today_str, upper))
+        return [dict(r) for r in cur.fetchall()]
+
+    def get_recently_modified_instruments(self, days: int = 7, include_archived: bool = False):
+        """Instruments with updated_at in the last days (for Needs Attention)."""
+        sql = """
+            SELECT i.id, i.tag_number, i.next_due_date, i.updated_at,
+                   d.name AS destination_name, it.name AS instrument_type_name
+            FROM instruments i
+            LEFT JOIN destinations d ON i.destination_id = d.id
+            LEFT JOIN instrument_types it ON i.instrument_type_id = it.id
+            WHERE datetime(i.updated_at) >= datetime('now', ?)
+            """
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(instruments)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "deleted_at" in cols and not include_archived:
+            sql += " AND (i.deleted_at IS NULL OR i.deleted_at = '')"
+        sql += " ORDER BY i.updated_at DESC, i.tag_number"
+        cur = self.conn.execute(sql, (f"-{days} days",))
         return [dict(r) for r in cur.fetchall()]
 
     def get_instrument(self, instrument_id: int):
@@ -1283,8 +1832,7 @@ class CalibrationRepository:
         today = date.today()
         upper = today + timedelta(days=reminder_days)
 
-        cur = self.conn.execute(
-            """
+        sql = """
             SELECT i.*,
                    d.name AS destination_name
             FROM instruments i
@@ -1293,9 +1841,13 @@ class CalibrationRepository:
               AND i.next_due_date IS NOT NULL
               AND i.next_due_date >= ?
               AND i.next_due_date <= ?
-            ORDER BY i.next_due_date ASC, i.tag_number ASC
-            """,
-            (today.isoformat(), upper.isoformat()),
-        )
+            """
+        cur = self.conn.cursor()
+        cur.execute("PRAGMA table_info(instruments)")
+        cols = [r[1] for r in cur.fetchall()]
+        if "deleted_at" in cols:
+            sql += " AND (i.deleted_at IS NULL OR i.deleted_at = '')"
+        sql += " ORDER BY i.next_due_date ASC, i.tag_number ASC"
+        cur = self.conn.execute(sql, (today.isoformat(), upper.isoformat()))
         rows = cur.fetchall()
         return [dict(row) for row in rows]

@@ -554,7 +554,7 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
             
             <h4>Details Panel:</h4>
             <ul>
-                <li>Shows difference values per calibration point</li>
+                <li>Shows calculated values and bool pass/fail per calibration point</li>
                 <li>Displays template notes (if applicable)</li>
                 <li>Shows all field values from the calibration</li>
             </ul>
@@ -871,6 +871,12 @@ class InstrumentTableModel(QtCore.QAbstractTableModel):
             return self.instruments[row]["id"]
         return None
 
+    def get_instrument_at_row(self, row):
+        """Return the full instrument dict for a source row (for proxy filtering)."""
+        if 0 <= row < len(self.instruments):
+            return self.instruments[row]
+        return None
+
 
 class InstrumentDialog(QtWidgets.QDialog):
     def __init__(self, repo: CalibrationRepository, instrument=None, parent=None):
@@ -1083,6 +1089,32 @@ class SettingsDialog(QtWidgets.QDialog):
         rem_form.addRow("Operator name", self.operator_edit)
         rem_form.addRow(hint)
 
+        # Quiet hours: listener will not show popup during this time (still logs)
+        quiet_layout = QtWidgets.QHBoxLayout()
+        self.quiet_start_edit = QtWidgets.QTimeEdit()
+        self.quiet_start_edit.setDisplayFormat("HH:mm")
+        self.quiet_end_edit = QtWidgets.QTimeEdit()
+        self.quiet_end_edit.setDisplayFormat("HH:mm")
+        _qstart = self.repo.get_setting("quiet_start", "")
+        _qend = self.repo.get_setting("quiet_end", "")
+        if _qstart and len(_qstart) >= 5:
+            try:
+                h, m = int(_qstart[:2]), int(_qstart[3:5])
+                self.quiet_start_edit.setTime(QtCore.QTime(h, m))
+            except Exception:
+                pass
+        if _qend and len(_qend) >= 5:
+            try:
+                h, m = int(_qend[:2]), int(_qend[3:5])
+                self.quiet_end_edit.setTime(QtCore.QTime(h, m))
+            except Exception:
+                pass
+        quiet_layout.addWidget(self.quiet_start_edit)
+        quiet_layout.addWidget(QtWidgets.QLabel("to"))
+        quiet_layout.addWidget(self.quiet_end_edit)
+        quiet_layout.addWidget(QtWidgets.QLabel("(leave 00:00–00:00 to disable)"))
+        rem_form.addRow("Quiet hours (no popup):", quiet_layout)
+
         tabs.addTab(rem_widget, "Reminders")
 
         # Buttons
@@ -1109,6 +1141,20 @@ class SettingsDialog(QtWidgets.QDialog):
         self.repo.set_setting(
             "operator_name", self.operator_edit.text().strip()
         )
+        qstart = self.quiet_start_edit.time().toString("HH:mm")
+        qend = self.quiet_end_edit.time().toString("HH:mm")
+        self.repo.set_setting("quiet_start", qstart)
+        self.repo.set_setting("quiet_end", qend)
+        # Write quiet hours to file so standalone listener can read
+        try:
+            import os
+            base = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Roaming")
+            path = os.path.join(base, "CalibrationTracker", "quiet_hours.txt")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(qstart + "\n" + qend + "\n")
+        except Exception:
+            pass
         super().accept()
 
 class AttachmentsDialog(QtWidgets.QDialog):
@@ -1448,10 +1494,144 @@ class DestinationsDialog(QtWidgets.QDialog):
                 self._load_destinations()
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "Error", str(e))
-                
-class TemplateEditDialog(QtWidgets.QDialog):
-    def __init__(self, template=None, parent=None):
+
+
+class PersonnelEditDialog(QtWidgets.QDialog):
+    """Add or edit a personnel record (name, role, qualifications, review expiry)."""
+    def __init__(self, repo: CalibrationRepository, person=None, parent=None):
         super().__init__(parent)
+        self.repo = repo
+        self.person = person if person and isinstance(person, dict) else {}
+        is_edit = bool(self.person and self.person.get("id"))
+        self.setWindowTitle("Personnel" + (" - Edit" if is_edit else " - New"))
+        form = QtWidgets.QFormLayout(self)
+        self.name_edit = QtWidgets.QLineEdit(self.person.get("name", ""))
+        self.role_edit = QtWidgets.QLineEdit(self.person.get("role", ""))
+        self.qualifications_edit = QtWidgets.QPlainTextEdit()
+        self.qualifications_edit.setPlainText(self.person.get("qualifications", "") or "")
+        self.review_expiry_edit = QtWidgets.QLineEdit(self.person.get("review_expiry", "") or "")
+        self.review_expiry_edit.setPlaceholderText("YYYY-MM-DD (optional)")
+        self.active_check = QtWidgets.QCheckBox("Active")
+        self.active_check.setChecked(bool(int(self.person.get("active", 1))))
+        form.addRow("Name*", self.name_edit)
+        form.addRow("Role", self.role_edit)
+        form.addRow("Qualifications", self.qualifications_edit)
+        form.addRow("Review/expiry date", self.review_expiry_edit)
+        form.addRow("", self.active_check)
+        btn_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        form.addRow(btn_box)
+
+    def get_data(self):
+        name = self.name_edit.text().strip()
+        if not name:
+            QtWidgets.QMessageBox.warning(self, "Validation", "Name is required.")
+            return None
+        return {
+            "name": name,
+            "role": self.role_edit.text().strip(),
+            "qualifications": self.qualifications_edit.toPlainText().strip(),
+            "review_expiry": self.review_expiry_edit.text().strip() or None,
+            "active": self.active_check.isChecked(),
+        }
+
+
+class PersonnelDialog(QtWidgets.QDialog):
+    """Manage personnel (technicians authorized to perform calibrations)."""
+    def __init__(self, repo: CalibrationRepository, parent=None):
+        super().__init__(parent)
+        self.repo = repo
+        self.setWindowTitle("Personnel")
+        layout = QtWidgets.QVBoxLayout(self)
+        self.table = QtWidgets.QTableWidget()
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["Name", "Role", "Qualifications", "Review expiry"])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        layout.addWidget(self.table)
+        btn_layout = QtWidgets.QHBoxLayout()
+        self.btn_add = QtWidgets.QPushButton("Add")
+        self.btn_add.clicked.connect(self.on_add)
+        btn_layout.addWidget(self.btn_add)
+        self.btn_edit = QtWidgets.QPushButton("Edit")
+        self.btn_edit.clicked.connect(self.on_edit)
+        btn_layout.addWidget(self.btn_edit)
+        self.btn_delete = QtWidgets.QPushButton("Delete")
+        self.btn_delete.clicked.connect(self.on_delete)
+        btn_layout.addWidget(self.btn_delete)
+        layout.addLayout(btn_layout)
+        btn_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close)
+        btn_box.rejected.connect(self.accept)
+        layout.addWidget(btn_box)
+        self._load()
+
+    def _load(self):
+        people = self.repo.list_personnel(active_only=False)
+        self.table.setRowCount(len(people))
+        for row, p in enumerate(people):
+            self.table.setItem(row, 0, QtWidgets.QTableWidgetItem(p.get("name", "")))
+            self.table.item(row, 0).setData(QtCore.Qt.UserRole, p["id"])
+            self.table.setItem(row, 1, QtWidgets.QTableWidgetItem(p.get("role", "") or ""))
+            self.table.setItem(row, 2, QtWidgets.QTableWidgetItem((p.get("qualifications") or "")[:80]))
+            self.table.setItem(row, 3, QtWidgets.QTableWidgetItem(p.get("review_expiry") or ""))
+
+    def _selected_id(self):
+        row = self.table.currentRow()
+        if row < 0:
+            return None
+        item = self.table.item(row, 0)
+        return item.data(QtCore.Qt.UserRole) if item else None
+
+    def on_add(self):
+        dlg = PersonnelEditDialog(self.repo, parent=self)
+        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+            data = dlg.get_data()
+            if data:
+                self.repo.add_personnel(
+                    data["name"], data["role"], data["qualifications"],
+                    data.get("review_expiry"), data.get("active", True),
+                )
+                self._load()
+
+    def on_edit(self):
+        pid = self._selected_id()
+        if not pid:
+            return
+        person = self.repo.get_personnel(pid)
+        if not person:
+            return
+        dlg = PersonnelEditDialog(self.repo, person, parent=self)
+        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+            data = dlg.get_data()
+            if data:
+                self.repo.update_personnel(
+                    pid, data["name"], data["role"], data["qualifications"],
+                    data.get("review_expiry"), data.get("active", True),
+                )
+                self._load()
+
+    def on_delete(self):
+        pid = self._selected_id()
+        if not pid:
+            return
+        if QtWidgets.QMessageBox.question(
+            self, "Delete", "Remove this person from the list?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        ) != QtWidgets.QMessageBox.Yes:
+            return
+        try:
+            self.repo.delete_personnel(pid)
+            self._load()
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", str(e))
+
+
+class TemplateEditDialog(QtWidgets.QDialog):
+    def __init__(self, repo: CalibrationRepository, template=None, parent=None):
+        super().__init__(parent)
+        self.repo = repo
         # Store template - ensure it's a dict
         self.template = template if template and isinstance(template, dict) else {}
         is_edit_mode = bool(self.template and self.template.get("id"))
@@ -1490,6 +1670,64 @@ class TemplateEditDialog(QtWidgets.QDialog):
         form.addRow("Version", self.version_spin)
         form.addRow("", self.active_check)
         form.addRow("Notes", self.notes_edit)
+        # M8: Status, change reason, effective date (when columns exist)
+        self.status_combo = QtWidgets.QComboBox()
+        self.status_combo.addItems(["Draft", "Approved", "Archived"])
+        status = (self.template.get("status") or "Draft").strip()
+        idx = self.status_combo.findText(status)
+        if idx >= 0:
+            self.status_combo.setCurrentIndex(idx)
+        form.addRow("Status", self.status_combo)
+        self.change_reason_edit = QtWidgets.QLineEdit(self.template.get("change_reason") or "")
+        self.change_reason_edit.setPlaceholderText("Required when creating new revision")
+        form.addRow("Change reason (for new revision)", self.change_reason_edit)
+        self.effective_date_edit = QtWidgets.QLineEdit(self.template.get("effective_date") or "")
+        self.effective_date_edit.setPlaceholderText("YYYY-MM-DD (optional)")
+        form.addRow("Effective date", self.effective_date_edit)
+        self._update_template_lock_state()
+
+        # Authorized performers (M7): who can perform calibrations with this template
+        form.addRow(QtWidgets.QLabel("<b>Authorized performers</b>"))
+        auth_btn_row = QtWidgets.QHBoxLayout()
+        select_all_btn = QtWidgets.QPushButton("Select all")
+        select_none_btn = QtWidgets.QPushButton("Select none")
+        select_active_btn = QtWidgets.QPushButton("Select all active")
+        select_all_btn.setToolTip("Select all personnel as authorized performers")
+        select_none_btn.setToolTip("Clear selection")
+        select_active_btn.setToolTip("Select only active personnel (reduces form filling for new templates)")
+        auth_btn_row.addWidget(select_all_btn)
+        auth_btn_row.addWidget(select_none_btn)
+        auth_btn_row.addWidget(select_active_btn)
+        auth_btn_row.addStretch()
+        form.addRow(auth_btn_row)
+        self.authorized_list = QtWidgets.QListWidget()
+        self.authorized_list.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
+        try:
+            all_people = self.repo.list_personnel(active_only=False)
+        except Exception:
+            all_people = []
+        self._personnel = all_people
+        active_ids = {p["id"] for p in all_people if p.get("active", True)}
+        for p in all_people:
+            item = QtWidgets.QListWidgetItem(p.get("name", "") + (f" ({p.get('role', '')})" if p.get("role") else ""))
+            item.setData(QtCore.Qt.UserRole, p["id"])
+            self.authorized_list.addItem(item)
+        try:
+            auth_ids = self.repo.get_template_authorized_person_ids(self.template["id"]) if self.template.get("id") else []
+        except Exception:
+            auth_ids = []
+        # New template: default to all active personnel so user doesn't have to fill form
+        if not self.template.get("id") and not auth_ids and active_ids:
+            auth_ids = list(active_ids)
+        for i in range(self.authorized_list.count()):
+            item = self.authorized_list.item(i)
+            if item.data(QtCore.Qt.UserRole) in auth_ids:
+                item.setSelected(True)
+        select_all_btn.clicked.connect(self._authorized_select_all)
+        select_none_btn.clicked.connect(self._authorized_select_none)
+        select_active_btn.clicked.connect(lambda: self._authorized_select_active(active_ids))
+        form.addRow("Select personnel who may perform this procedure:", self.authorized_list)
+        self.status_combo.currentIndexChanged.connect(self._update_template_lock_state)
 
         btn_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel | QtWidgets.QDialogButtonBox.Help
@@ -1500,8 +1738,8 @@ class TemplateEditDialog(QtWidgets.QDialog):
         form.addRow(btn_box)
         
         # Ensure dialog is properly sized and visible
-        self.setMinimumSize(400, 300)
-        self.resize(500, 400)
+        self.setMinimumSize(400, 380)
+        self.resize(500, 480)
         
         # Explicitly ensure values are set (in case of any initialization issues)
         if self.template:
@@ -1564,17 +1802,69 @@ class TemplateEditDialog(QtWidgets.QDialog):
         dlg.raise_()
         dlg.activateWindow()
 
+    def _authorized_select_all(self):
+        for i in range(self.authorized_list.count()):
+            self.authorized_list.item(i).setSelected(True)
+
+    def _authorized_select_none(self):
+        for i in range(self.authorized_list.count()):
+            self.authorized_list.item(i).setSelected(False)
+
+    def _authorized_select_active(self, active_ids):
+        for i in range(self.authorized_list.count()):
+            item = self.authorized_list.item(i)
+            item.setSelected(item.data(QtCore.Qt.UserRole) in active_ids)
+
+    def _update_template_lock_state(self):
+        """M8: Lock name/version/notes when status is Approved."""
+        status = self.status_combo.currentText() if hasattr(self, "status_combo") else "Draft"
+        locked = status == "Approved"
+        if hasattr(self, "name_edit"):
+            self.name_edit.setReadOnly(locked)
+        if hasattr(self, "version_spin"):
+            self.version_spin.setReadOnly(locked)
+        if hasattr(self, "notes_edit"):
+            self.notes_edit.setReadOnly(locked)
+        if hasattr(self, "active_check"):
+            self.active_check.setEnabled(not locked)
+
     def get_data(self):
         name = self.name_edit.text().strip()
         if not name:
             QtWidgets.QMessageBox.warning(self, "Validation", "Name is required.")
             return None
+        new_version = self.version_spin.value()
+        old_version = int(self.template.get("version") or 1) if self.template else 0
+        change_reason = (self.change_reason_edit.text() or "").strip() if hasattr(self, "change_reason_edit") else ""
+        effective_date = (self.effective_date_edit.text() or "").strip() if hasattr(self, "effective_date_edit") else ""
+        if new_version > old_version and not change_reason:
+            QtWidgets.QMessageBox.warning(
+                self, "Change reason required",
+                "You increased the version. Please enter a change reason (e.g. 'Updated tolerances').",
+            )
+            return None
+        if new_version > old_version and not effective_date:
+            effective_date = date.today().isoformat()
         return {
             "name": name,
-            "version": self.version_spin.value(),
+            "version": new_version,
             "is_active": self.active_check.isChecked(),
             "notes": self.notes_edit.toPlainText().strip(),
+            "status": self.status_combo.currentText() if hasattr(self, "status_combo") else "Draft",
+            "change_reason": change_reason or None,
+            "effective_date": effective_date or None,
         }
+
+    def get_authorized_person_ids(self):
+        """Return list of selected personnel IDs (authorized to perform this template)."""
+        ids = []
+        for i in range(self.authorized_list.count()):
+            item = self.authorized_list.item(i)
+            if item.isSelected():
+                pid = item.data(QtCore.Qt.UserRole)
+                if pid is not None:
+                    ids.append(pid)
+        return ids
 
 class FieldEditDialog(QtWidgets.QDialog):
     def __init__(self, field=None, existing_fields=None, parent=None):
@@ -1583,10 +1873,21 @@ class FieldEditDialog(QtWidgets.QDialog):
         self.existing_fields = existing_fields or []
         self.setWindowTitle("Field" + (" - Edit" if field else " - New"))
 
-        form = QtWidgets.QFormLayout(self)
+        # Use scroll area so Tolerance type / Equation option is reachable on smaller screens
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        content = QtWidgets.QWidget()
+        content.setMinimumWidth(380)
+        form = QtWidgets.QFormLayout(content)
+        form.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
 
+        _min_field_w = 280
         self.name_edit = QtWidgets.QLineEdit(self.field.get("name", ""))
+        self.name_edit.setMinimumWidth(_min_field_w)
         self.label_edit = QtWidgets.QLineEdit(self.field.get("label", ""))
+        self.label_edit.setMinimumWidth(_min_field_w)
 
         self.type_combo = QtWidgets.QComboBox()
         self.type_combo.addItems(["text", "number", "bool", "date", "signature"])
@@ -1621,9 +1922,11 @@ class FieldEditDialog(QtWidgets.QDialog):
         self.sort_spin.setValue(int(self.field.get("sort_order", 0)))
 
         self.group_edit = QtWidgets.QLineEdit(self.field.get("group_name") or "")
+        self.group_edit.setMinimumWidth(_min_field_w)
 
         # Computation parameters
         self.calc_type_combo = QtWidgets.QComboBox()
+        self.calc_type_combo.setMinimumWidth(_min_field_w)
         self.calc_type_combo.addItem("None", None)
         self.calc_type_combo.addItem("Abs difference between two fields", "ABS_DIFF")
         self.calc_type_combo.addItem(
@@ -1660,7 +1963,37 @@ class FieldEditDialog(QtWidgets.QDialog):
         set_cb_from_name(self.ref1_combo, ref1)
         set_cb_from_name(self.ref2_combo, ref2)
 
-        # Tolerance (used with ABS_DIFF)
+        # Tolerance (used with ABS_DIFF / PCT_DIFF) — M1: plain-language options + example
+        self.tol_type_combo = QtWidgets.QComboBox()
+        self.tol_type_combo.setMinimumWidth(_min_field_w)
+        self.tol_type_combo.addItem("Fixed (±value)", "fixed")
+        self.tol_type_combo.addItem("Percent (% of nominal)", "percent")
+        self.tol_type_combo.addItem("Equation (e.g. 0.02 * abs(nominal))", "equation")
+        self.tol_type_combo.addItem("Lookup table (range → tolerance)", "lookup")
+        self.tol_type_combo.addItem("Boolean (true/false = pass)", "bool")
+        self.tol_type_combo.setToolTip(
+            "L3: Fixed = ±value (e.g. ±0.5). Percent = % of nominal (e.g. 2%). "
+            "Equation = formula with nominal/reading (e.g. 0.02*abs(nominal)). "
+            "Lookup = table of ranges → tolerance. Boolean = set whether True or False means PASS."
+        )
+        tol_type = self.field.get("tolerance_type") or "fixed"
+        if not self.field.get("tolerance_type"):
+            try:
+                s = QtCore.QSettings("CalibrationTracker", "CalibrationTracker")
+                last = s.value("Template/LastToleranceType", "fixed")
+                if last and self.tol_type_combo.findData(last) >= 0:
+                    tol_type = last
+            except Exception:
+                pass
+        idx = self.tol_type_combo.findData(tol_type)
+        if idx >= 0:
+            self.tol_type_combo.setCurrentIndex(idx)
+        self.tol_type_combo.currentIndexChanged.connect(self._on_tolerance_type_changed)
+        # M1: Short description + example per type
+        self.tol_desc_label = QtWidgets.QLabel("")
+        self.tol_desc_label.setWordWrap(True)
+        self.tol_desc_label.setStyleSheet("color: #888; font-size: 0.9em;")
+
         self.tol_spin = QtWidgets.QDoubleSpinBox()
         self.tol_spin.setDecimals(6)
         self.tol_spin.setRange(0.0, 1e9)
@@ -1670,6 +2003,46 @@ class FieldEditDialog(QtWidgets.QDialog):
                 self.tol_spin.setValue(float(tol_val))
             except Exception:
                 pass
+
+        self.tol_equation_edit = QtWidgets.QLineEdit(self.field.get("tolerance_equation") or "")
+        self.tol_equation_edit.setMinimumWidth(_min_field_w)
+        self.tol_equation_edit.setPlaceholderText("e.g. 0.02 * abs(nominal)")
+        self.tol_equation_edit.setToolTip(
+            "L3: Use + - * / ** and abs(), min(), max(), round(). Variables: nominal, reading, ref1, ref2. "
+            "Example: 0.02 * abs(nominal) gives ±2% of nominal. What does this mean? Click Help."
+        )
+        self.tol_equation_label = QtWidgets.QLabel("Tolerance equation")
+        # Boolean tolerance: pass when True or False
+        self.tol_bool_pass_combo = QtWidgets.QComboBox()
+        self.tol_bool_pass_combo.addItem("Pass when value is True", "true")
+        self.tol_bool_pass_combo.addItem("Pass when value is False", "false")
+        bool_pass = (self.field.get("tolerance_equation") or "true").strip().lower()
+        idx_bool = self.tol_bool_pass_combo.findData("true" if bool_pass == "true" else "false")
+        if idx_bool >= 0:
+            self.tol_bool_pass_combo.setCurrentIndex(idx_bool)
+        self.tol_bool_pass_label = QtWidgets.QLabel("Pass when value is")
+        self.nominal_value_edit = QtWidgets.QLineEdit(self.field.get("nominal_value") or "")
+        self.nominal_value_edit.setMinimumWidth(_min_field_w)
+        self.nominal_value_edit.setPlaceholderText("Optional default nominal for this point")
+        # L1: Lookup table (range_low, range_high, tolerance)
+        self.lookup_group = QtWidgets.QGroupBox("Lookup table (range → tolerance)")
+        lookup_layout = QtWidgets.QVBoxLayout(self.lookup_group)
+        self.lookup_table = QtWidgets.QTableWidget()
+        self.lookup_table.setColumnCount(3)
+        self.lookup_table.setHorizontalHeaderLabels(["Range low", "Range high", "Tolerance"])
+        self.lookup_table.horizontalHeader().setStretchLastSection(True)
+        lookup_layout.addWidget(self.lookup_table)
+        lookup_btn_row = QtWidgets.QHBoxLayout()
+        btn_add_lookup = QtWidgets.QPushButton("Add row")
+        btn_remove_lookup = QtWidgets.QPushButton("Remove selected")
+        btn_add_lookup.clicked.connect(self._lookup_add_row)
+        btn_remove_lookup.clicked.connect(self._lookup_remove_row)
+        lookup_btn_row.addWidget(btn_add_lookup)
+        lookup_btn_row.addWidget(btn_remove_lookup)
+        lookup_btn_row.addStretch()
+        lookup_layout.addLayout(lookup_btn_row)
+        self._load_lookup_table()
+        form.addRow(self.lookup_group)
 
         form.addRow("Name* (internal)", self.name_edit)
         form.addRow("Label* (shown)", self.label_edit)
@@ -1683,20 +2056,78 @@ class FieldEditDialog(QtWidgets.QDialog):
         form.addRow("Calculation", self.calc_type_combo)
         form.addRow("Value 1 field", self.ref1_combo)
         form.addRow("Value 2 field", self.ref2_combo)
-        form.addRow("Tolerance (for abs or % diff)", self.tol_spin)
-        
+        form.addRow("Tolerance type", self.tol_type_combo)
+        self.tol_type_hint = QtWidgets.QLabel(
+            "Choose \"Equation\" to define a formula (e.g. 0.02 * abs(nominal)); "
+            "choose \"Lookup\" for range-based tolerance."
+        )
+        self.tol_type_hint.setWordWrap(True)
+        self.tol_type_hint.setStyleSheet("color: #666; font-size: 0.9em;")
+        form.addRow("", self.tol_type_hint)
+        form.addRow("", self.tol_desc_label)
+        self.tol_value_label = QtWidgets.QLabel("Tolerance (fixed value or %)")
+        form.addRow(self.tol_value_label, self.tol_spin)
+        form.addRow(self.tol_equation_label, self.tol_equation_edit)
+        form.addRow(self.tol_bool_pass_label, self.tol_bool_pass_combo)
+        form.addRow("Nominal value (optional)", self.nominal_value_edit)
+        # M2: Variable picker — insert-variable buttons for equation
+        self.var_btn_layout = QtWidgets.QHBoxLayout()
+        self.var_btn_layout.addWidget(QtWidgets.QLabel("Insert:"))
+        for var_name in ("nominal", "reading", "ref1", "ref2"):
+            btn = QtWidgets.QPushButton(var_name)
+            btn.setMaximumWidth(60)
+            btn.clicked.connect(lambda checked, v=var_name: self._insert_variable(v))
+            self.var_btn_layout.addWidget(btn)
+        self.var_btn_layout.addStretch()
+        self.var_btn_widget = QtWidgets.QWidget()
+        self.var_btn_widget.setLayout(self.var_btn_layout)
+        form.addRow("", self.var_btn_widget)
+        # M2: Inline validation message
+        self.tol_validation_label = QtWidgets.QLabel("")
+        self.tol_validation_label.setWordWrap(True)
+        self.tol_validation_label.setStyleSheet("color: #c00; font-size: 0.9em;")
+        form.addRow("", self.tol_validation_label)
+        self.tol_equation_edit.textChanged.connect(self._on_equation_changed)
+        # M3: Test equation panel
+        self.test_group = QtWidgets.QGroupBox("Test equation")
+        test_layout = QtWidgets.QFormLayout(self.test_group)
+        self.test_nominal_spin = QtWidgets.QDoubleSpinBox()
+        self.test_nominal_spin.setRange(-1e12, 1e12)
+        self.test_nominal_spin.setValue(10.0)
+        self.test_reading_spin = QtWidgets.QDoubleSpinBox()
+        self.test_reading_spin.setRange(-1e12, 1e12)
+        self.test_reading_spin.setValue(10.0)
+        self.test_tolerance_label = QtWidgets.QLabel("—")
+        self.test_passfail_label = QtWidgets.QLabel("—")
+        test_layout.addRow("Nominal:", self.test_nominal_spin)
+        test_layout.addRow("Reading:", self.test_reading_spin)
+        test_layout.addRow("Tolerance:", self.test_tolerance_label)
+        test_layout.addRow("Pass/Fail:", self.test_passfail_label)
+        for w in (self.test_nominal_spin, self.test_reading_spin):
+            w.valueChanged.connect(self._update_test_result)
+        form.addRow(self.test_group)
+        self._on_tolerance_type_changed(self.tol_type_combo.currentIndex())
+        self._update_tolerance_description()
+        self._update_test_result()
+
         # Autofill option
         self.autofill_check = QtWidgets.QCheckBox("Autofill from previous group")
         self.autofill_check.setChecked(bool(self.field.get("autofill_from_first_group", 0)))
         form.addRow("", self.autofill_check)
 
+        scroll.setWidget(content)
+        scroll.setMinimumHeight(420)
+        main_layout = QtWidgets.QVBoxLayout(self)
+        main_layout.addWidget(scroll)
         btn_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel | QtWidgets.QDialogButtonBox.Help
         )
         btn_box.accepted.connect(self.accept)
         btn_box.rejected.connect(self.reject)
         btn_box.helpRequested.connect(lambda: self._show_help())
-        form.addRow(btn_box)
+        main_layout.addWidget(btn_box)
+        self.setMinimumSize(460, 520)
+        self.resize(540, 680)
     
     def _load_signatures(self):
         """Load available signatures from the Signatures folder."""
@@ -1722,7 +2153,157 @@ class FieldEditDialog(QtWidgets.QDialog):
         if hasattr(self, 'signature_combo') and hasattr(self, 'signature_label'):
             self.signature_combo.setVisible(is_signature)
             self.signature_label.setVisible(is_signature)
-    
+
+    def _on_tolerance_type_changed(self, index: int):
+        """Show equation edit when tolerance type is Equation; bool pass combo for Boolean; hide fixed/% spinbox; M1/M2/M3."""
+        tol_type = self.tol_type_combo.currentData() if hasattr(self, 'tol_type_combo') else "fixed"
+        is_equation = (tol_type == "equation")
+        is_lookup = (tol_type == "lookup")
+        is_bool = (tol_type == "bool")
+        if hasattr(self, 'tol_equation_edit'):
+            self.tol_equation_edit.setVisible(is_equation)
+            self.tol_equation_label.setVisible(is_equation)
+        if hasattr(self, 'tol_bool_pass_combo'):
+            self.tol_bool_pass_combo.setVisible(is_bool)
+            self.tol_bool_pass_label.setVisible(is_bool)
+        if hasattr(self, 'tol_spin'):
+            self.tol_spin.setVisible(not is_equation and not is_lookup and not is_bool)
+        if hasattr(self, 'tol_value_label'):
+            self.tol_value_label.setVisible(not is_equation and not is_lookup and not is_bool)
+        if hasattr(self, 'tol_desc_label'):
+            self._update_tolerance_description()
+        if hasattr(self, 'var_btn_widget'):
+            self.var_btn_widget.setVisible(is_equation)
+        if hasattr(self, 'tol_validation_label'):
+            self.tol_validation_label.setVisible(is_equation)
+            self._on_equation_changed()
+        if hasattr(self, 'test_group'):
+            self.test_group.setVisible(is_equation)
+            self._update_test_result()
+        if hasattr(self, 'lookup_group'):
+            self.lookup_group.setVisible(is_lookup)
+
+    def _load_lookup_table(self):
+        """L1: Load lookup rows from field.tolerance_lookup_json."""
+        import json
+        raw = self.field.get("tolerance_lookup_json") or ""
+        try:
+            rows = json.loads(raw.strip()) if raw.strip() else []
+        except (ValueError, TypeError):
+            rows = []
+        if not isinstance(rows, list):
+            rows = []
+        self.lookup_table.setRowCount(len(rows))
+        for i, row in enumerate(rows):
+            if not isinstance(row, dict):
+                row = {}
+            self.lookup_table.setItem(i, 0, QtWidgets.QTableWidgetItem(str(row.get("range_low", ""))))
+            self.lookup_table.setItem(i, 1, QtWidgets.QTableWidgetItem(str(row.get("range_high", ""))))
+            self.lookup_table.setItem(i, 2, QtWidgets.QTableWidgetItem(str(row.get("tolerance", ""))))
+        if not rows:
+            self._lookup_add_row()
+
+    def _lookup_add_row(self):
+        row = self.lookup_table.rowCount()
+        self.lookup_table.insertRow(row)
+        self.lookup_table.setItem(row, 0, QtWidgets.QTableWidgetItem("0"))
+        self.lookup_table.setItem(row, 1, QtWidgets.QTableWidgetItem("10"))
+        self.lookup_table.setItem(row, 2, QtWidgets.QTableWidgetItem("0.1"))
+
+    def _lookup_remove_row(self):
+        row = self.lookup_table.currentRow()
+        if row >= 0:
+            self.lookup_table.removeRow(row)
+
+    def _get_lookup_json(self):
+        """L1: Build JSON array of {range_low, range_high, tolerance} from table."""
+        import json
+        rows = []
+        for row in range(self.lookup_table.rowCount()):
+            low_item = self.lookup_table.item(row, 0)
+            high_item = self.lookup_table.item(row, 1)
+            tol_item = self.lookup_table.item(row, 2)
+            low_s = (low_item.text() if low_item else "").strip()
+            high_s = (high_item.text() if high_item else "").strip()
+            tol_s = (tol_item.text() if tol_item else "").strip()
+            if not low_s and not high_s and not tol_s:
+                continue
+            try:
+                low = float(low_s) if low_s else float("-inf")
+                high = float(high_s) if high_s else float("inf")
+                tol = float(tol_s) if tol_s else 0.0
+            except ValueError:
+                continue
+            rows.append({"range_low": low, "range_high": high, "tolerance": tol})
+        return json.dumps(rows) if rows else None
+
+    def _update_tolerance_description(self):
+        """M1: Plain-language description + example for selected tolerance type."""
+        tol_type = self.tol_type_combo.currentData() or "fixed"
+        desc = {
+            "fixed": "Example: ±0.5 — reading must be within 0.5 of nominal to PASS.",
+            "percent": "Example: 2% — tolerance = 2% of |nominal|; e.g. nominal 100 → ±2.",
+            "equation": "Example: 0.02 * abs(nominal) — tolerance scales with nominal. Use Insert buttons.",
+            "lookup": "Define ranges: nominal in [range_low, range_high] uses that row's tolerance. Example: 0–10 → ±0.1, 10–100 → ±0.5.",
+            "bool": "Choose whether True or False counts as PASS. Use for yes/no or checkbox fields.",
+        }.get(tol_type, "")
+        if hasattr(self, 'tol_desc_label'):
+            self.tol_desc_label.setText(desc)
+
+    def _insert_variable(self, var_name: str):
+        """M2: Insert variable at cursor in equation edit."""
+        if not hasattr(self, 'tol_equation_edit'):
+            return
+        self.tol_equation_edit.insert(var_name)
+        self.tol_equation_edit.setFocus()
+
+    def _on_equation_changed(self):
+        """M2: Inline validation (syntax, undefined vars) for equation."""
+        if not hasattr(self, 'tol_validation_label') or not self.tol_equation_edit.isVisible():
+            return
+        eq = self.tol_equation_edit.text().strip()
+        if not eq:
+            self.tol_validation_label.setText("")
+            return
+        try:
+            from tolerance_service import parse_equation, validate_equation_variables
+            parse_equation(eq)
+            ok, unknown = validate_equation_variables(eq)
+            if not ok:
+                self.tol_validation_label.setText(f"Unknown variables: {', '.join(unknown)}. Allowed: nominal, reading, ref1, ref2, ref, value, abs_nominal.")
+            else:
+                self.tol_validation_label.setText("✓ Valid")
+                self.tol_validation_label.setStyleSheet("color: #080; font-size: 0.9em;")
+        except ValueError as e:
+            self.tol_validation_label.setText(str(e))
+            self.tol_validation_label.setStyleSheet("color: #c00; font-size: 0.9em;")
+        self._update_test_result()
+
+    def _update_test_result(self):
+        """M3: Live tolerance and pass/fail for sample nominal/reading."""
+        if not hasattr(self, 'test_group') or not self.test_group.isVisible():
+            return
+        eq = self.tol_equation_edit.text().strip() if hasattr(self, 'tol_equation_edit') else ""
+        nominal = self.test_nominal_spin.value()
+        reading = self.test_reading_spin.value()
+        if not eq:
+            self.test_tolerance_label.setText("—")
+            self.test_passfail_label.setText("—")
+            return
+        try:
+            from tolerance_service import evaluate_tolerance_equation, evaluate_pass_fail
+            v = {"nominal": nominal, "reading": reading}
+            tol_val = evaluate_tolerance_equation(eq, v)
+            self.test_tolerance_label.setText(f"{tol_val:.6g}")
+            pass_, _, expl = evaluate_pass_fail("equation", None, eq, nominal, reading, v)
+            # L4: Icon + text (not color-only) for accessibility
+            self.test_passfail_label.setText(("\u2713 PASS" if pass_ else "\u2717 FAIL"))
+            self.test_passfail_label.setStyleSheet("color: #080;" if pass_ else "color: #c00; font-weight: bold;")
+        except Exception as e:
+            self.test_tolerance_label.setText("—")
+            self.test_passfail_label.setText(str(e)[:40])
+            self.test_passfail_label.setStyleSheet("color: #c00;")
+
     def _show_help(self):
         title, content = get_help_content("FieldEditDialog")
         dlg = HelpDialog(title, content, self)
@@ -1752,11 +2333,61 @@ class FieldEditDialog(QtWidgets.QDialog):
                 )
                 return None
 
+        tol_type = self.tol_type_combo.currentData() or "fixed"
         tol = None
-        if calc_type in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF"):
-            tval = self.tol_spin.value()
-            if tval > 0:
-                tol = tval
+        tolerance_equation = None
+        if tol_type == "bool":
+            tolerance_equation = (self.tol_bool_pass_combo.currentData() or "true")
+        elif calc_type in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF"):
+            if tol_type == "equation":
+                tolerance_equation = self.tol_equation_edit.text().strip() or None
+                if not tolerance_equation:
+                    QtWidgets.QMessageBox.warning(
+                        self, "Validation",
+                        "Tolerance equation is required when tolerance type is Equation.",
+                    )
+                    return None
+                try:
+                    from tolerance_service import parse_equation, validate_equation_variables
+                    parse_equation(tolerance_equation)
+                    ok, unknown = validate_equation_variables(tolerance_equation)
+                    if not ok:
+                        QtWidgets.QMessageBox.warning(
+                            self, "Validation",
+                            f"Equation uses unknown variables: {', '.join(unknown)}. "
+                            "Allowed: nominal, reading, ref1, ref2, ref, value, abs_nominal.",
+                        )
+                        return None
+                except ValueError as e:
+                    QtWidgets.QMessageBox.warning(
+                        self, "Validation",
+                        f"Invalid tolerance equation: {e}",
+                    )
+                    return None
+            elif tol_type == "lookup":
+                # L1: Build tolerance_lookup_json from table
+                tolerance_lookup_json = self._get_lookup_json()
+                if not tolerance_lookup_json:
+                    QtWidgets.QMessageBox.warning(
+                        self, "Validation",
+                        "Add at least one row to the lookup table (range low, range high, tolerance).",
+                    )
+                    return None
+            else:
+                tval = self.tol_spin.value()
+                if tval > 0:
+                    tol = tval
+        tolerance_lookup_json = None
+        if tol_type == "lookup":
+            tolerance_lookup_json = self._get_lookup_json()
+        # M7: Remember last-used tolerance type
+        try:
+            s = QtCore.QSettings("CalibrationTracker", "CalibrationTracker")
+            s.setValue("Template/LastToleranceType", tol_type)
+        except Exception:
+            pass
+
+        nominal_value = self.nominal_value_edit.text().strip() or None
 
         data_type = self.type_combo.currentText()
         default_value = None
@@ -1775,9 +2406,105 @@ class FieldEditDialog(QtWidgets.QDialog):
             "calc_ref1_name": ref1_name,
             "calc_ref2_name": ref2_name,
             "tolerance": tol,
+            "tolerance_type": tol_type,
+            "tolerance_equation": tolerance_equation,
+            "nominal_value": nominal_value,
+            "tolerance_lookup_json": tolerance_lookup_json,
             "autofill_from_first_group": self.autofill_check.isChecked(),
             "default_value": default_value,  # Store signature filename for signature fields
         }
+
+
+class ExplainToleranceDialog(QtWidgets.QDialog):
+    """H6: Read-only dialog showing how tolerance is calculated (plain language + technical)."""
+    def __init__(self, field: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Explain tolerance")
+        layout = QtWidgets.QVBoxLayout(self)
+        label = field.get("label") or field.get("name") or "Field"
+        layout.addWidget(QtWidgets.QLabel(f"<b>{label}</b>"))
+        tol_type = field.get("tolerance_type") or "fixed"
+        tol_fixed = field.get("tolerance")
+        tol_eq = field.get("tolerance_equation")
+        nominal_str = field.get("nominal_value") or ""
+        unit = field.get("unit") or ""
+
+        # Plain-language explanation
+        if tol_type == "fixed" and tol_fixed is not None:
+            try:
+                t = float(tol_fixed)
+                expl = f"Tolerance is a fixed value of ±{t} {unit}".strip()
+                expl += ". Readings must be within this range of the nominal value to PASS."
+            except (TypeError, ValueError):
+                expl = "Tolerance: fixed (value not set)."
+        elif tol_type == "percent" and tol_fixed is not None:
+            try:
+                p = float(tol_fixed)
+                expl = f"Tolerance is {p}% of the nominal value. "
+                expl += "The allowed deviation = |nominal| × " + str(p) + "%."
+            except (TypeError, ValueError):
+                expl = "Tolerance: percent (value not set)."
+        elif tol_type == "equation" and tol_eq:
+            expl = f"Tolerance is calculated by: {tol_eq}. "
+            try:
+                from tolerance_service import evaluate_tolerance_equation
+                nominal = 10.0
+                if nominal_str:
+                    try:
+                        nominal = float(nominal_str)
+                    except (TypeError, ValueError):
+                        pass
+                v = evaluate_tolerance_equation(tol_eq, {"nominal": nominal, "reading": 0})
+                expl += f"Example: with nominal = {nominal}, tolerance = {v}."
+            except Exception as e:
+                expl += f"(Example calculation failed: {e})"
+        elif tol_type == "lookup":
+            import json
+            lookup_json = field.get("tolerance_lookup_json") or ""
+            try:
+                rows = json.loads(lookup_json) if lookup_json.strip() else []
+                if rows:
+                    expl = "Tolerance is chosen from the lookup table by nominal value. Ranges: "
+                    expl += "; ".join(
+                        f"[{r.get('range_low')}–{r.get('range_high')}] → ±{r.get('tolerance')}"
+                        for r in rows if isinstance(r, dict)
+                    )
+                else:
+                    expl = "Lookup table is empty."
+            except (ValueError, TypeError):
+                expl = "Lookup table (invalid or empty)."
+        elif tol_type == "bool":
+            pass_when = (tol_eq or "true").strip().lower()
+            if pass_when == "true":
+                expl = "PASS when the value is True (checked). FAIL when the value is False (unchecked)."
+            else:
+                expl = "PASS when the value is False (unchecked). FAIL when the value is True (checked)."
+        else:
+            expl = "No tolerance defined for this field, or type is not set."
+
+        layout.addWidget(QtWidgets.QLabel("Plain-language explanation:"))
+        expl_label = QtWidgets.QLabel(expl)
+        expl_label.setWordWrap(True)
+        expl_label.setStyleSheet("padding: 6px;")
+        layout.addWidget(expl_label)
+        layout.addWidget(QtWidgets.QLabel("Technical:"))
+        tech = f"Type: {tol_type or 'fixed'}"
+        if tol_fixed is not None:
+            tech += f"  |  Value: {tol_fixed}"
+        if tol_eq:
+            tech += f"  |  Equation: {tol_eq}"
+        if nominal_str:
+            tech += f"  |  Nominal: {nominal_str}"
+        if unit:
+            tech += f"  |  Unit: {unit}"
+        tech_label = QtWidgets.QLabel(tech)
+        tech_label.setWordWrap(True)
+        tech_label.setStyleSheet("padding: 6px; font-family: monospace;")
+        layout.addWidget(tech_label)
+        btn = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close)
+        btn.rejected.connect(self.reject)
+        layout.addWidget(btn)
+
 
 class TemplateFieldsDialog(QtWidgets.QDialog):
     def __init__(self, repo: CalibrationRepository, template_id: int, parent=None):
@@ -1806,18 +2533,33 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
         )
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.table.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.table.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
+        self.table.setDefaultDropAction(QtCore.Qt.MoveAction)
         layout.addWidget(self.table)
+        # M5: Summary row
+        self.summary_label = QtWidgets.QLabel("")
+        self.summary_label.setStyleSheet("font-weight: bold; padding: 4px;")
+        layout.addWidget(self.summary_label)
 
         btn_layout = QtWidgets.QHBoxLayout()
         self.btn_add = QtWidgets.QPushButton("Add")
         self.btn_edit = QtWidgets.QPushButton("Edit")
         self.btn_delete = QtWidgets.QPushButton("Delete")
         self.btn_dup_group = QtWidgets.QPushButton("Duplicate group")
+        self.btn_explain = QtWidgets.QPushButton("Explain tolerance")
+        self.btn_apply_tol = QtWidgets.QPushButton("Apply tolerance to selected")
+        self.btn_shift_nominals = QtWidgets.QPushButton("Shift nominals")
+        self.btn_save_order = QtWidgets.QPushButton("Save order")
+        self.btn_explain.setToolTip("Show how tolerance is calculated (plain language + technical)")
         btn_layout.addWidget(self.btn_add)
         btn_layout.addWidget(self.btn_edit)
         btn_layout.addWidget(self.btn_delete)
         btn_layout.addWidget(self.btn_dup_group)
+        btn_layout.addWidget(self.btn_explain)
+        btn_layout.addWidget(self.btn_apply_tol)
+        btn_layout.addWidget(self.btn_shift_nominals)
+        btn_layout.addWidget(self.btn_save_order)
         btn_layout.addStretch(1)
         layout.addLayout(btn_layout)
 
@@ -1826,6 +2568,10 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
         self.btn_edit.clicked.connect(self.on_edit)
         self.btn_delete.clicked.connect(self.on_delete)
         self.btn_dup_group.clicked.connect(self.on_dup_group)
+        self.btn_explain.clicked.connect(self.on_explain_tolerance)
+        self.btn_apply_tol.clicked.connect(self.on_apply_tolerance_to_selected)
+        self.btn_shift_nominals.clicked.connect(self.on_shift_nominals)
+        self.btn_save_order.clicked.connect(self.on_save_order)
 
         btn_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Help | QtWidgets.QDialogButtonBox.Close)
         btn_box.helpRequested.connect(lambda: self._show_help())
@@ -1882,7 +2628,17 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                     calc_desc = f"|{r1} - {r2}| / avg * 100"
 
                 tol = f.get("tolerance")
-                tol_txt = "" if tol is None else str(tol)
+                tol_type = f.get("tolerance_type") or "fixed"
+                if tol_type == "equation":
+                    eq = (f.get("tolerance_equation") or "").strip()
+                    tol_txt = f"equation: {eq[:40]}..." if len(eq) > 40 else ("equation: " + eq if eq else "")
+                elif tol_type == "percent":
+                    tol_txt = (str(tol) + "%") if tol is not None else ""
+                elif tol_type == "bool":
+                    pass_when = (f.get("tolerance_equation") or "true").strip().lower()
+                    tol_txt = "pass when True" if pass_when == "true" else "pass when False"
+                else:
+                    tol_txt = "" if tol is None else str(tol)
 
                 self.table.setItem(row, 0, it_name)
                 self.table.setItem(row, 1, mk(f.get("label", "")))
@@ -1893,11 +2649,38 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                 self.table.setItem(row, 6, mk(f.get("group_name") or ""))
                 self.table.setItem(row, 7, mk(calc_desc))
                 self.table.setItem(row, 8, mk(tol_txt))
+            # M5: Summary row
+            tolerances = []
+            for f in fields:
+                t = f.get("tolerance")
+                if t is not None:
+                    try:
+                        tolerances.append(float(t))
+                    except (TypeError, ValueError):
+                        pass
+            n = len(fields)
+            if tolerances:
+                self.summary_label.setText(
+                    f"{n} point(s)  |  Min tolerance: {min(tolerances):.6g}  |  Max tolerance: {max(tolerances):.6g}"
+                )
+            else:
+                self.summary_label.setText(f"{n} point(s)")
         finally:
             # Re-enable updates and refresh the table
             self.table.setUpdatesEnabled(True)
             self.table.viewport().update()
             QtWidgets.QApplication.processEvents()
+
+    def _selected_field_ids(self):
+        """Return list of field IDs for selected rows (M5 multi-select)."""
+        ids = []
+        for row in range(self.table.rowCount()):
+            if self.table.item(row, 0) and self.table.isRowSelected(row):
+                item = self.table.item(row, 0)
+                fid = item.data(QtCore.Qt.UserRole)
+                if fid is not None:
+                    ids.append(fid)
+        return ids
 
     def _selected_field_id(self):
         row = self.table.currentRow()
@@ -1930,6 +2713,11 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
             data["calc_ref2_name"],
             data["tolerance"],
             data.get("autofill_from_first_group", False),
+            data.get("default_value"),
+            data.get("tolerance_type"),
+            data.get("tolerance_equation"),
+            data.get("nominal_value"),
+            data.get("tolerance_lookup_json"),
         )
         self._load_fields()
 
@@ -1962,6 +2750,138 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
             return
         self.repo.delete_template_field(field_id)
         self._load_fields()
+
+    def on_explain_tolerance(self):
+        """H6: Open Explain tolerance dialog for selected field."""
+        field_id = self._selected_field_id()
+        if not field_id:
+            QtWidgets.QMessageBox.information(
+                self,
+                "No selection",
+                "Select a field to explain its tolerance.",
+            )
+            return
+        fields = self.repo.list_template_fields(self.template_id)
+        field = next((f for f in fields if f["id"] == field_id), None)
+        if not field:
+            return
+        dlg = ExplainToleranceDialog(field, parent=self)
+        dlg.exec_()
+
+    def on_apply_tolerance_to_selected(self):
+        """M5: Apply same tolerance type + value to selected fields."""
+        ids = self._selected_field_ids()
+        if not ids:
+            QtWidgets.QMessageBox.information(
+                self, "No selection", "Select one or more rows to apply tolerance to."
+            )
+            return
+        tol_type, ok1 = QtWidgets.QInputDialog.getItem(
+            self, "Tolerance type", "Type:",
+            ["fixed", "percent", "equation", "lookup", "bool"], 0, False
+        )
+        if not ok1:
+            return
+        if tol_type == "equation":
+            tol_val = None
+            tol_eq, ok2 = QtWidgets.QInputDialog.getText(
+                self, "Tolerance equation", "Equation (e.g. 0.02 * abs(nominal)):",
+                QtWidgets.QLineEdit.Normal, "0.02 * abs(nominal)"
+            )
+            if not ok2 or not tol_eq.strip():
+                return
+            tol_eq = tol_eq.strip()
+        elif tol_type == "bool":
+            tol_val = None
+            pass_choice, ok2 = QtWidgets.QInputDialog.getItem(
+                self, "Boolean tolerance", "Pass when value is:",
+                ["True", "False"], 0, False
+            )
+            if not ok2:
+                return
+            tol_eq = "true" if pass_choice == "True" else "false"
+        else:
+            tol_eq = None
+            tol_val, ok2 = QtWidgets.QInputDialog.getDouble(
+                self, "Tolerance value", "Value:",
+                0.5, 0.0, 1e9, 6
+            )
+            if not ok2:
+                return
+        fields = self.repo.list_template_fields(self.template_id)
+        field_by_id = {f["id"]: f for f in fields}
+        for fid in ids:
+            f = field_by_id.get(fid)
+            if not f:
+                continue
+            # Bool tolerance applies to bool fields; other types apply to ABS_DIFF/PCT_ERROR/PCT_DIFF
+            if tol_type == "bool":
+                if f.get("data_type") != "bool":
+                    continue
+            elif f.get("calc_type") not in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF"):
+                continue
+            data = dict(f)
+            data["tolerance_type"] = tol_type
+            data["tolerance"] = tol_val if tol_val is not None else f.get("tolerance")
+            data["tolerance_equation"] = tol_eq if tol_eq else f.get("tolerance_equation")
+            self.repo.update_template_field(fid, data)
+        self._load_fields()
+        QtWidgets.QMessageBox.information(
+            self, "Done", f"Applied tolerance to {len(ids)} field(s)."
+        )
+
+    def on_shift_nominals(self):
+        """M5: Add offset to nominal_value of selected fields."""
+        ids = self._selected_field_ids()
+        if not ids:
+            QtWidgets.QMessageBox.information(
+                self, "No selection", "Select one or more rows to shift nominals."
+            )
+            return
+        offset, ok = QtWidgets.QInputDialog.getDouble(
+            self, "Shift nominals", "Offset to add to nominal value:",
+            0.0, -1e12, 1e12, 4
+        )
+        if not ok:
+            return
+        fields = self.repo.list_template_fields(self.template_id)
+        for f in fields:
+            if f["id"] not in ids:
+                continue
+            data = dict(f)
+            nom = (f.get("nominal_value") or "").strip()
+            try:
+                val = float(nom) if nom else 0.0
+                data["nominal_value"] = str(val + offset)
+            except ValueError:
+                continue
+            self.repo.update_template_field(f["id"], data)
+        self._load_fields()
+        QtWidgets.QMessageBox.information(
+            self, "Done", f"Shifted nominals by {offset} for {len(ids)} field(s)."
+        )
+
+    def on_save_order(self):
+        """M5: Persist current row order as sort_order."""
+        order = []
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item:
+                fid = item.data(QtCore.Qt.UserRole)
+                if fid is not None:
+                    order.append((fid, row))
+        if not order:
+            return
+        fields = self.repo.list_template_fields(self.template_id)
+        field_by_id = {f["id"]: f for f in fields}
+        for fid, sort_order in order:
+            f = field_by_id.get(fid)
+            if f:
+                data = dict(f)
+                data["sort_order"] = sort_order
+                self.repo.update_template_field(fid, data)
+        self._load_fields()
+        QtWidgets.QMessageBox.information(self, "Order saved", "Row order saved.")
 
     def on_dup_group(self):
         fields = self.repo.list_template_fields(self.template_id)
@@ -2069,6 +2989,11 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                 ref2,
                 tol,
                 bool(f.get("autofill_from_first_group", 0)),
+                f.get("default_value"),
+                f.get("tolerance_type"),
+                f.get("tolerance_equation"),
+                f.get("nominal_value"),
+                f.get("tolerance_lookup_json"),
             )
 
         self._load_fields()
@@ -2098,11 +3023,11 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         info_label = QtWidgets.QLabel(" | ".join(info))
         layout.addWidget(info_label)
 
-        # Table of records (no Result column)
+        # Table of records (Date, Template, Performed by, Result, State)
         self.table = QtWidgets.QTableWidget()
-        self.table.setColumnCount(4)
+        self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(
-            ["Date", "Template", "Performed by", "Result"]
+            ["Date", "Template", "Performed by", "Result", "State"]
         )
         
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -2110,8 +3035,8 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         layout.addWidget(self.table)
 
-        # Details area for differences
-        layout.addWidget(QtWidgets.QLabel("Difference values (per point):"))
+        # Details area: calculated values and bool pass/fail per point
+        layout.addWidget(QtWidgets.QLabel("Values per point (calculated & pass/fail):"))
         self.details = QtWidgets.QPlainTextEdit()
         self.details.setReadOnly(True)
         self.details.setMinimumHeight(170)
@@ -2221,8 +3146,19 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         if resp != QtWidgets.QMessageBox.Yes:
             return
 
+        reason, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Reason for deletion",
+            "Reason (optional, for audit log):",
+            QtWidgets.QLineEdit.Normal,
+            "",
+        )
+        if not ok:
+            return
+        reason = reason.strip() or None
+
         try:
-            self.repo.delete_calibration_record(rec_id)
+            self.repo.delete_calibration_record(rec_id, reason=reason)
         except Exception as e:
             QtWidgets.QMessageBox.critical(
                 self,
@@ -2266,9 +3202,15 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         self.table.setRowCount(len(recs))
         for row, r in enumerate(recs):
             item_date = QtWidgets.QTableWidgetItem(r.get("cal_date", ""))
-            item_tpl = QtWidgets.QTableWidgetItem(r.get("template_name", ""))
+            tpl_name = r.get("template_name", "")
+            tpl_ver = r.get("template_version")
+            if tpl_ver is not None:
+                tpl_name = f"{tpl_name} (v{tpl_ver})" if tpl_name else f"v{tpl_ver}"
+            item_tpl = QtWidgets.QTableWidgetItem(tpl_name)
             item_perf = QtWidgets.QTableWidgetItem(r.get("performed_by", "") or "")
             item_result = QtWidgets.QTableWidgetItem(r.get("result", "") or "")
+            state = r.get("record_state") or "Draft"
+            item_state = QtWidgets.QTableWidgetItem(state)
 
             item_date.setData(QtCore.Qt.UserRole, r["id"])  # store record_id
 
@@ -2276,11 +3218,13 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
             self.table.setItem(row, 1, item_tpl)
             self.table.setItem(row, 2, item_perf)
             self.table.setItem(row, 3, item_result)
+            self.table.setItem(row, 4, item_state)
 
         if recs:
             self.table.selectRow(0)
         else:
             self.details.clear()
+        self._update_record_buttons()
 
     def _selected_record_id(self):
         row = self.table.currentRow()
@@ -2291,51 +3235,51 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
             return None
         return item.data(QtCore.Qt.UserRole)
 
+    def _update_record_buttons(self):
+        """Enable/disable View/Edit and Delete based on record state (lock when Approved/Archived)."""
+        rec_id = self._selected_record_id()
+        if not rec_id:
+            self.btn_view.setEnabled(True)
+            self.btn_delete_file.setEnabled(True)
+            return
+        rec = self.repo.get_calibration_record_with_template(rec_id)
+        state = (rec or {}).get("record_state") or "Draft"
+        locked = state in ("Approved", "Archived")
+        self.btn_view.setEnabled(True)  # View always allowed; edit may be read-only inside dialog
+        self.btn_delete_file.setEnabled(not locked)
+        if locked:
+            self.btn_delete_file.setToolTip("This record is locked (Approved/Archived) and cannot be deleted.")
+        else:
+            self.btn_delete_file.setToolTip("Delete the selected calibration record")
+
     def _update_details(self):
         rec_id = self._selected_record_id()
         if not rec_id:
             self.details.clear()
+            self._update_record_buttons()
             return
 
         vals = self.repo.get_calibration_values(rec_id)
         rec = self.repo.get_calibration_record_with_template(rec_id)
+        self._update_record_buttons()
 
+        values_by_name = {v.get("field_name"): v.get("value_text") for v in vals}
         lines = []
         last_group = None
 
+        try:
+            from tolerance_service import evaluate_pass_fail
+        except ImportError:
+            evaluate_pass_fail = None
+
         for v in vals:
-            # Only show computed diff-like fields
-            if v.get("calc_type") not in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF"):
-                continue
-
-            val_txt = v.get("value_text")
-            if not val_txt:
-                continue
-
-            # Parse numeric diff (absolute value)
-            diff = None
-            try:
-                diff = abs(float(str(val_txt).strip()))
-            except Exception:
-                diff = None
-
-            # Parse tolerance
-            tol_raw = v.get("tolerance")
-            tol_f = None
-            if tol_raw not in (None, ""):
-                try:
-                    tol_f = float(str(tol_raw))
-                except Exception:
-                    tol_f = None
-
-            status = ""
-            if tol_f is not None and diff is not None:
-                # FAIL if outside tolerance
-                status = "FAIL" if diff > tol_f else "PASS"
-
             group = v.get("group_name") or ""
             label = v.get("label") or v.get("field_name") or ""
             unit = v.get("unit") or ""
+            val_txt = v.get("value_text")
+            calc_type = v.get("calc_type")
+            data_type = v.get("data_type") or ""
+            tol_type = v.get("tolerance_type") or "fixed"
 
             # Add blank line between groups
             if last_group is not None and group != last_group:
@@ -2346,15 +3290,99 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
             prefix = f"{group}, " if group else ""
             unit_str = f" {unit}" if unit else ""
 
-            line = f"{prefix}{label}: {val_txt}{unit_str}"
-            if status:
-                line += f" ({status})"
+            # 1) Computed difference fields (ABS_DIFF, PCT_ERROR, PCT_DIFF) with tolerance
+            if calc_type in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF"):
+                if not val_txt:
+                    continue
+                try:
+                    diff = abs(float(str(val_txt).strip()))
+                except Exception:
+                    diff = None
+                if diff is None:
+                    continue
 
-            lines.append(line)
+                tol_raw = v.get("tolerance")
+                tol_fixed = None
+                if tol_raw not in (None, ""):
+                    try:
+                        tol_fixed = float(str(tol_raw))
+                    except Exception:
+                        pass
+
+                status = ""
+                tol_used = ""
+                if evaluate_pass_fail and (tol_fixed is not None or v.get("tolerance_equation") or v.get("tolerance_lookup_json")):
+                    ref1_name = v.get("calc_ref1_name")
+                    ref2_name = v.get("calc_ref2_name")
+                    nominal = 0.0
+                    nominal_str = v.get("nominal_value")
+                    if nominal_str not in (None, ""):
+                        try:
+                            nominal = float(str(nominal_str).strip())
+                        except Exception:
+                            pass
+                    vars_map = {"nominal": nominal, "reading": diff}
+                    if ref1_name and ref1_name in values_by_name:
+                        try:
+                            vars_map["ref1"] = float(values_by_name[ref1_name] or 0)
+                        except (TypeError, ValueError):
+                            vars_map["ref1"] = 0.0
+                    if ref2_name and ref2_name in values_by_name:
+                        try:
+                            vars_map["ref2"] = float(values_by_name[ref2_name] or 0)
+                        except (TypeError, ValueError):
+                            vars_map["ref2"] = 0.0
+                    try:
+                        pass_, tol_val, _ = evaluate_pass_fail(
+                            tol_type,
+                            tol_fixed,
+                            v.get("tolerance_equation"),
+                            nominal,
+                            diff,
+                            vars_map=vars_map,
+                            tolerance_lookup_json=v.get("tolerance_lookup_json"),
+                        )
+                        status = "\u2713 PASS" if pass_ else "\u2717 FAIL"
+                        if tol_val is not None and tol_val != 0:
+                            tol_used = f" (tol ±{tol_val})"
+                    except Exception:
+                        if tol_fixed is not None:
+                            status = "\u2713 PASS" if diff <= tol_fixed else "\u2717 FAIL"
+                elif tol_fixed is not None:
+                    status = "\u2713 PASS" if diff <= tol_fixed else "\u2717 FAIL"
+
+                line = f"{prefix}{label}: {val_txt}{unit_str}{tol_used}"
+                if status:
+                    line += f"  {status}"
+                lines.append(line)
+                continue
+
+            # 2) Bool fields with bool tolerance (pass when true/false)
+            if data_type == "bool" and tol_type == "bool":
+                pass_when = (v.get("tolerance_equation") or "true").strip().lower()
+                if pass_when not in ("true", "false"):
+                    continue
+                reading_bool = val_txt in ("1", "true", "yes", "on")
+                reading_float = 1.0 if reading_bool else 0.0
+                value_display = "True" if reading_bool else "False"
+                status = ""
+                if evaluate_pass_fail:
+                    try:
+                        pass_, _, _ = evaluate_pass_fail(
+                            "bool", None, pass_when, 0.0, reading_float,
+                            vars_map={}, tolerance_lookup_json=None,
+                        )
+                        status = "\u2713 PASS" if pass_ else "\u2717 FAIL"
+                    except Exception:
+                        pass
+                line = f"{prefix}{label}: {value_display}"
+                if status:
+                    line += f"  {status}"
+                lines.append(line)
 
         if not lines:
             self.details.setPlainText(
-                "No difference values recorded for this calibration."
+                "No calculated or pass/fail values recorded for this calibration."
             )
         else:
             # Add two new lines after the last point difference
@@ -2430,8 +3458,10 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                 is_active=True,
                 notes="Placeholder template for external (file-only) calibrations.",
             )
+            tpl_version = 1
         else:
             tpl_id = ext_tpl["id"]
+            tpl_version = ext_tpl.get("version", 1)
 
         today_str = date.today().isoformat()
         performed_by = ""
@@ -2447,6 +3477,7 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
             result,
             notes,
             field_values={},
+            template_version=tpl_version,
         )
 
         # Attach file directly to this record
@@ -2467,7 +3498,12 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         if not rec_id:
             return
         inst = self.repo.get_instrument(self.instrument_id)
-        dlg = CalibrationFormDialog(self.repo, inst, record_id=rec_id, parent=self)
+        rec = self.repo.get_calibration_record_with_template(rec_id)
+        state = (rec or {}).get("record_state") or "Draft"
+        read_only = state in ("Approved", "Archived")
+        dlg = CalibrationFormDialog(
+            self.repo, inst, record_id=rec_id, parent=self, read_only=read_only
+        )
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             self._load_records()
             self._update_details()
@@ -2550,10 +3586,14 @@ class TemplatesDialog(QtWidgets.QDialog):
         btn_layout = QtWidgets.QHBoxLayout()
         self.btn_add = QtWidgets.QPushButton("Add")
         self.btn_edit = QtWidgets.QPushButton("Edit")
+        self.btn_clone = QtWidgets.QPushButton("Clone")
+        self.btn_copy_similar = QtWidgets.QPushButton("Copy from similar")
         self.btn_delete = QtWidgets.QPushButton("Delete")
         self.btn_fields = QtWidgets.QPushButton("Fields...")
         btn_layout.addWidget(self.btn_add)
         btn_layout.addWidget(self.btn_edit)
+        btn_layout.addWidget(self.btn_clone)
+        btn_layout.addWidget(self.btn_copy_similar)
         btn_layout.addWidget(self.btn_delete)
         btn_layout.addStretch(1)
         btn_layout.addWidget(self.btn_fields)
@@ -2566,6 +3606,8 @@ class TemplatesDialog(QtWidgets.QDialog):
 
         self.btn_add.clicked.connect(self.on_add)
         self.btn_edit.clicked.connect(self.on_edit)
+        self.btn_clone.clicked.connect(self.on_clone)
+        self.btn_copy_similar.clicked.connect(self.on_copy_from_similar)
         self.btn_delete.clicked.connect(self.on_delete)
         self.btn_fields.clicked.connect(self.on_fields)
 
@@ -2606,20 +3648,135 @@ class TemplatesDialog(QtWidgets.QDialog):
                 self, "Instrument type", "Select an instrument type first."
             )
             return
-        dlg = TemplateEditDialog(parent=self)
+        dlg = TemplateEditDialog(self.repo, parent=self)
         if dlg.exec_() != QtWidgets.QDialog.Accepted:
             return
         data = dlg.get_data()
         if not data:
             return
-        self.repo.create_template(
+        new_id = self.repo.create_template(
             type_id,
             data["name"],
             data["version"],
             data["is_active"],
             data["notes"],
         )
+        try:
+            self.repo.set_template_authorized_personnel(new_id, dlg.get_authorized_person_ids())
+        except Exception:
+            pass
         self._load_templates()
+
+    def on_clone(self):
+        """M6: Duplicate current template and all its fields."""
+        tpl_id = self._current_template_id()
+        if not tpl_id:
+            QtWidgets.QMessageBox.information(
+                self, "No selection", "Select a template to clone."
+            )
+            return
+        tpl = self.repo.get_template(tpl_id)
+        if not tpl:
+            return
+        type_id = tpl.get("instrument_type_id")
+        if not type_id:
+            return
+        new_name = (tpl.get("name") or "Template") + " (copy)"
+        new_id = self.repo.create_template(
+            type_id, new_name, 1, False, tpl.get("notes") or "",
+            status="Draft",
+        )
+        fields = self.repo.list_template_fields(tpl_id)
+        for i, f in enumerate(fields):
+            self.repo.add_template_field(
+                new_id,
+                f.get("name", ""),
+                f.get("label", ""),
+                f.get("data_type", "number"),
+                f.get("unit"),
+                bool(f.get("required")),
+                i,
+                f.get("group_name"),
+                f.get("calc_type"),
+                f.get("calc_ref1_name"),
+                f.get("calc_ref2_name"),
+                f.get("tolerance"),
+                bool(f.get("autofill_from_first_group", 0)),
+                f.get("default_value"),
+                f.get("tolerance_type"),
+                f.get("tolerance_equation"),
+                f.get("nominal_value"),
+                f.get("tolerance_lookup_json"),
+            )
+        self._load_templates()
+        QtWidgets.QMessageBox.information(
+            self, "Cloned", f"Created '{new_name}'. Open Fields... to edit."
+        )
+
+    def on_copy_from_similar(self):
+        """M6: Copy from a template of another instrument type."""
+        type_id = self._current_type_id()
+        if not type_id:
+            QtWidgets.QMessageBox.warning(
+                self, "Instrument type", "Select an instrument type first (target)."
+            )
+            return
+        types = self.repo.list_instrument_types()
+        type_names = [t["name"] for t in types]
+        src_type_name, ok1 = QtWidgets.QInputDialog.getItem(
+            self, "Copy from similar", "Source instrument type:",
+            type_names, 0, False
+        )
+        if not ok1:
+            return
+        src_type_id = next((t["id"] for t in types if t["name"] == src_type_name), None)
+        if not src_type_id:
+            return
+        templates = self.repo.list_templates_for_type(src_type_id, active_only=False)
+        if not templates:
+            QtWidgets.QMessageBox.information(
+                self, "No templates", f"No templates for '{src_type_name}'."
+            )
+            return
+        tpl_names = [f"{t['name']} (v{t['version']})" for t in templates]
+        tpl_choice, ok2 = QtWidgets.QInputDialog.getItem(
+            self, "Copy from similar", "Source template:",
+            tpl_names, 0, False
+        )
+        if not ok2:
+            return
+        src_tpl = templates[tpl_names.index(tpl_choice)]
+        new_name = (src_tpl.get("name") or "Template") + f" (from {src_type_name})"
+        new_id = self.repo.create_template(
+            type_id, new_name, 1, False, src_tpl.get("notes") or "",
+            status="Draft",
+        )
+        fields = self.repo.list_template_fields(src_tpl["id"])
+        for i, f in enumerate(fields):
+            self.repo.add_template_field(
+                new_id,
+                f.get("name", ""),
+                f.get("label", ""),
+                f.get("data_type", "number"),
+                f.get("unit"),
+                bool(f.get("required")),
+                i,
+                f.get("group_name"),
+                f.get("calc_type"),
+                f.get("calc_ref1_name"),
+                f.get("calc_ref2_name"),
+                f.get("tolerance"),
+                bool(f.get("autofill_from_first_group", 0)),
+                f.get("default_value"),
+                f.get("tolerance_type"),
+                f.get("tolerance_equation"),
+                f.get("nominal_value"),
+                f.get("tolerance_lookup_json"),
+            )
+        self._load_templates()
+        QtWidgets.QMessageBox.information(
+            self, "Copied", f"Created '{new_name}' with {len(fields)} field(s)."
+        )
 
     def on_edit(self):
         tpl_id = self._current_template_id()
@@ -2628,7 +3785,7 @@ class TemplatesDialog(QtWidgets.QDialog):
         tpl = self.repo.get_template(tpl_id)
         if not tpl:
             return
-        dlg = TemplateEditDialog(template=tpl, parent=self)
+        dlg = TemplateEditDialog(self.repo, template=tpl, parent=self)
         if dlg.exec_() != QtWidgets.QDialog.Accepted:
             return
         data = dlg.get_data()
@@ -2640,7 +3797,14 @@ class TemplatesDialog(QtWidgets.QDialog):
             data["version"],
             data["is_active"],
             data["notes"],
+            effective_date=data.get("effective_date"),
+            change_reason=data.get("change_reason"),
+            status=data.get("status"),
         )
+        try:
+            self.repo.set_template_authorized_personnel(tpl_id, dlg.get_authorized_person_ids())
+        except Exception:
+            pass
         self._load_templates()
 
     def on_delete(self):
@@ -2671,19 +3835,21 @@ class CalibrationFormDialog(QtWidgets.QDialog):
     """
     Dynamic calibration form based on calibration_templates and fields.
     Supports both New and Edit (if record_id provided).
+    read_only=True disables edits (Approved/Archived records).
     """
     def __init__(self, repo: CalibrationRepository, instrument: dict,
-                 record_id: int | None = None, parent=None):
+                 record_id: int | None = None, parent=None, read_only: bool = False):
         super().__init__(parent)
         self.repo = repo
         self.instrument = instrument
         self.record_id = record_id
+        self.read_only = read_only
         self.template = None
         self.fields = []
         self.field_widgets = {}  # field_id -> widget
 
         inst_tag = instrument.get("tag_number", str(instrument["id"]))
-        self.setWindowTitle(f"Calibration - {inst_tag}")
+        self.setWindowTitle(f"Calibration - {inst_tag}" + (" (read-only)" if read_only else ""))
 
         layout = QtWidgets.QVBoxLayout(self)
 
@@ -2722,18 +3888,20 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
         self.date_edit.setDate(QtCore.QDate.currentDate())
 
-        self.performed_edit = QtWidgets.QLineEdit()
-        try:
-            op = self.repo.get_setting("operator_name", "")
-        except Exception:
-            op = ""
-        if op:
-            self.performed_edit.setText(op)
+        # Performed by: personnel combo (from template authorized list or all) + Other
+        self.performed_combo = QtWidgets.QComboBox()
+        self.performed_combo.setEditable(False)
+        self.performed_other_edit = QtWidgets.QLineEdit()
+        self.performed_other_edit.setPlaceholderText("Enter name if not in list")
+        self.performed_other_edit.setVisible(False)
+        self.performed_combo.currentIndexChanged.connect(self._on_performed_combo_changed)
+        meta_layout.addRow("Cal date", self.date_edit)
+        meta_layout.addRow("Performed by", self.performed_combo)
+        meta_layout.addRow("", self.performed_other_edit)
+
         self.result_combo = QtWidgets.QComboBox()
         self.result_combo.addItems(["PASS", "FAIL", "OUT_OF_TOL", "OTHER"])
 
-        meta_layout.addRow("Cal date", self.date_edit)
-        meta_layout.addRow("Performed by", self.performed_edit)
         meta_layout.addRow("Result", self.result_combo)
 
         layout.addLayout(meta_layout)
@@ -2753,13 +3921,13 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         layout.addWidget(self.template_notes_display)
 
         # Buttons
-        btn_box = QtWidgets.QDialogButtonBox(
+        self.btn_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel | QtWidgets.QDialogButtonBox.Help
         )
-        btn_box.accepted.connect(self.accept)
-        btn_box.rejected.connect(self.reject)
-        btn_box.helpRequested.connect(lambda: self._show_help())
-        layout.addWidget(btn_box)
+        self.btn_box.accepted.connect(self.accept)
+        self.btn_box.rejected.connect(self.reject)
+        self.btn_box.helpRequested.connect(lambda: self._show_help())
+        layout.addWidget(self.btn_box)
         
         # Set initial dialog size
         self.resize(950, 600)
@@ -2768,7 +3936,55 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             self._init_new()
         else:
             self._init_edit()
+        if self.read_only:
+            self._set_read_only()
     
+    def _on_performed_combo_changed(self, index):
+        is_other = self.performed_combo.currentText() == "Other..."
+        self.performed_other_edit.setVisible(is_other)
+        if is_other:
+            self.performed_other_edit.setFocus()
+
+    def _build_performed_by_combo(self):
+        """Populate Performed by combo from template-authorized personnel or all personnel."""
+        self.performed_combo.clear()
+        try:
+            if self.template and self.template.get("id"):
+                people = self.repo.list_personnel_authorized_for_template(self.template["id"])
+            else:
+                people = self.repo.list_personnel(active_only=True)
+            for p in people:
+                self.performed_combo.addItem(p.get("name", ""), p.get("id"))
+            self.performed_combo.addItem("Other...", None)
+            # Default: operator_name from settings if it matches a personnel name
+            try:
+                op = self.repo.get_setting("operator_name", "") or ""
+            except Exception:
+                op = ""
+            if op:
+                idx = self.performed_combo.findText(op)
+                if idx >= 0:
+                    self.performed_combo.setCurrentIndex(idx)
+                elif self.performed_combo.count() > 1:
+                    self.performed_combo.setCurrentIndex(0)
+        except Exception:
+            self.performed_combo.addItem("Other...", None)
+
+    def _set_read_only(self):
+        """Disable all inputs and hide OK for Approved/Archived records."""
+        self.date_edit.setEnabled(False)
+        self.performed_combo.setEnabled(False)
+        self.performed_other_edit.setEnabled(False)
+        self.result_combo.setEnabled(False)
+        for w in self.field_widgets.values():
+            w.setEnabled(False)
+        ok_btn = self.btn_box.button(QtWidgets.QDialogButtonBox.Ok)
+        if ok_btn:
+            ok_btn.setVisible(False)
+        cancel_btn = self.btn_box.button(QtWidgets.QDialogButtonBox.Cancel)
+        if cancel_btn:
+            cancel_btn.setText("Close")
+
     def _show_help(self):
         title, content = get_help_content("CalibrationFormDialog")
         dlg = HelpDialog(title, content, self)
@@ -3159,6 +4375,7 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             QtCore.QTimer.singleShot(0, self.reject)
             return
         self._build_dynamic_form()
+        self._build_performed_by_combo()
         # Load and display template notes
         template_notes = str(self.template.get("notes", "") or "")
         self.template_notes_display.setPlainText(template_notes)
@@ -3183,6 +4400,7 @@ class CalibrationFormDialog(QtWidgets.QDialog):
 
         self.template = self.repo.get_template(rec["template_id"])
         self._build_dynamic_form()
+        self._build_performed_by_combo()
 
         # Fill metadata
         try:
@@ -3191,8 +4409,15 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         except Exception:
             pass
 
-        if rec.get("performed_by"):
-            self.performed_edit.setText(rec["performed_by"])
+        performed_by = rec.get("performed_by") or ""
+        idx = self.performed_combo.findText(performed_by)
+        if idx >= 0:
+            self.performed_combo.setCurrentIndex(idx)
+            self.performed_other_edit.setVisible(False)
+        else:
+            self.performed_combo.setCurrentIndex(self.performed_combo.count() - 1)  # Other...
+            self.performed_other_edit.setText(performed_by)
+            self.performed_other_edit.setVisible(True)
 
         res = rec.get("result") or "PASS"
         idx = self.result_combo.findText(res)
@@ -3247,7 +4472,10 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             return
 
         cal_date = self.date_edit.date().toString("yyyy-MM-dd")
-        performed_by = self.performed_edit.text().strip()
+        if self.performed_combo.currentText() == "Other...":
+            performed_by = self.performed_other_edit.text().strip()
+        else:
+            performed_by = self.performed_combo.currentText().strip()
         result = self.result_combo.currentText()
         # Notes are now permanent from template, not per-instance
         notes = ""
@@ -3359,19 +4587,24 @@ class CalibrationFormDialog(QtWidgets.QDialog):
 
         # If you ever add more calc types, handle them here.
 
-        # Third pass: auto-FAIL if any ABS_DIFF or PCT_DIFF exceeds tolerance
+        # Third pass: auto-FAIL if any ABS_DIFF or PCT_DIFF exceeds tolerance (central tolerance service)
         any_out_of_tol = False
+        try:
+            from tolerance_service import evaluate_pass_fail
+        except ImportError:
+            evaluate_pass_fail = None
         for f in self.fields:
             if f.get("calc_type") not in ("ABS_DIFF", "PCT_DIFF"):
                 continue
 
             tol_raw = f.get("tolerance")
-            if tol_raw in (None, ""):
-                continue
-
-            try:
-                tol = float(str(tol_raw))
-            except (TypeError, ValueError):
+            tol_fixed = None
+            if tol_raw not in (None, ""):
+                try:
+                    tol_fixed = float(str(tol_raw))
+                except (TypeError, ValueError):
+                    pass
+            if tol_fixed is None and not f.get("tolerance_equation"):
                 continue
 
             fid = f["id"]
@@ -3384,9 +4617,63 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             except (TypeError, ValueError):
                 continue
 
-            if diff > tol:
-                any_out_of_tol = True
-                break
+            if evaluate_pass_fail:
+                ref1 = f.get("calc_ref1_name")
+                ref2 = f.get("calc_ref2_name")
+                vars_map = {"nominal": 0.0, "reading": diff}
+                if ref1 and ref1 in values_by_name:
+                    try:
+                        vars_map["ref1"] = float(values_by_name[ref1] or 0)
+                    except (TypeError, ValueError):
+                        vars_map["ref1"] = 0.0
+                if ref2 and ref2 in values_by_name:
+                    try:
+                        vars_map["ref2"] = float(values_by_name[ref2] or 0)
+                    except (TypeError, ValueError):
+                        vars_map["ref2"] = 0.0
+                pass_, _, _ = evaluate_pass_fail(
+                    f.get("tolerance_type"),
+                    tol_fixed,
+                    f.get("tolerance_equation"),
+                    nominal=0.0,
+                    reading=diff,
+                    vars_map=vars_map,
+                    tolerance_lookup_json=f.get("tolerance_lookup_json"),
+                )
+                if not pass_:
+                    any_out_of_tol = True
+                    break
+            else:
+                if tol_fixed is not None and diff > tol_fixed:
+                    any_out_of_tol = True
+                    break
+
+        # Fourth pass: bool tolerance — auto-FAIL if bool field value doesn't match configured pass (true/false)
+        if not any_out_of_tol and evaluate_pass_fail:
+            for f in self.fields:
+                if f.get("data_type") != "bool" or f.get("tolerance_type") != "bool":
+                    continue
+                pass_when = (f.get("tolerance_equation") or "true").strip().lower()
+                if pass_when not in ("true", "false"):
+                    continue
+                fid = f["id"]
+                val_txt = field_values.get(fid)
+                if val_txt is None:
+                    continue
+                reading_bool = val_txt in ("1", "true", "yes", "on")
+                reading_float = 1.0 if reading_bool else 0.0
+                pass_, _, _ = evaluate_pass_fail(
+                    "bool",
+                    None,
+                    pass_when,
+                    nominal=0.0,
+                    reading=reading_float,
+                    vars_map={},
+                    tolerance_lookup_json=None,
+                )
+                if not pass_:
+                    any_out_of_tol = True
+                    break
 
         # If any point is out of tolerance, force overall result to FAIL
         if any_out_of_tol:
@@ -3406,6 +4693,7 @@ class CalibrationFormDialog(QtWidgets.QDialog):
                     result,
                     notes,
                     field_values,
+                    template_version=self.template.get("version"),
                 )
             else:
                 self.repo.update_calibration_record(
@@ -3425,6 +4713,86 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             return
 
         super().accept()
+
+
+class BatchUpdateDialog(QtWidgets.QDialog):
+    """Dialog to batch-update status or next due date for selected instruments."""
+
+    def __init__(self, count: int, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Batch update instruments")
+        self.count = count
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(QtWidgets.QLabel(f"Update the following for {count} selected instrument(s):"))
+
+        self.radio_status = QtWidgets.QRadioButton("Update status")
+        self.radio_status.setChecked(True)
+        layout.addWidget(self.radio_status)
+        self.status_combo = QtWidgets.QComboBox()
+        self.status_combo.addItems(["ACTIVE", "RETIRED", "OUT_FOR_CAL"])
+        layout.addWidget(self.status_combo)
+
+        self.radio_date = QtWidgets.QRadioButton("Update next due date")
+        layout.addWidget(self.radio_date)
+        self.date_edit = QtWidgets.QDateEdit(calendarPopup=True)
+        self.date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.date_edit.setDate(QtCore.QDate.currentDate().addYears(1))
+        layout.addWidget(self.date_edit)
+
+        self.reason_edit = QtWidgets.QLineEdit()
+        self.reason_edit.setPlaceholderText("Reason for change (optional, for audit log)")
+        layout.addWidget(QtWidgets.QLabel("Reason (optional):"))
+        layout.addWidget(self.reason_edit)
+
+        btn_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def get_update(self):
+        """Return (updates_dict, reason) or (None, None) if cancelled."""
+        if self.radio_status.isChecked():
+            return {"status": self.status_combo.currentText()}, self.reason_edit.text().strip() or None
+        return {"next_due_date": self.date_edit.date().toString("yyyy-MM-dd")}, self.reason_edit.text().strip() or None
+
+
+class BatchAssignInstrumentTypeDialog(QtWidgets.QDialog):
+    """Dialog to assign the same instrument type to multiple selected instruments."""
+
+    def __init__(self, repo: CalibrationRepository, count: int, parent=None):
+        super().__init__(parent)
+        self.repo = repo
+        self.setWindowTitle("Batch assign instrument type")
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(QtWidgets.QLabel(f"Assign instrument type for {count} selected instrument(s):"))
+
+        layout.addWidget(QtWidgets.QLabel("Instrument type:"))
+        self.type_combo = QtWidgets.QComboBox()
+        self.type_combo.addItem("(none)", None)
+        for t in repo.list_instrument_types():
+            self.type_combo.addItem(t["name"], t["id"])
+        self.type_combo.setMinimumWidth(280)
+        layout.addWidget(self.type_combo)
+
+        self.reason_edit = QtWidgets.QLineEdit()
+        self.reason_edit.setPlaceholderText("Reason for change (optional, for audit log)")
+        layout.addWidget(QtWidgets.QLabel("Reason (optional):"))
+        layout.addWidget(self.reason_edit)
+
+        btn_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    def get_result(self):
+        """Return (instrument_type_id, reason) or (None, None) if cancelled."""
+        type_id = self.type_combo.currentData()
+        reason = self.reason_edit.text().strip() or None
+        return type_id, reason
 
 
 class CalDateDialog(QtWidgets.QDialog):
@@ -3621,6 +4989,7 @@ class InstrumentFilterProxyModel(QtCore.QSortFilterProxyModel):
         self.status_filter = ""
         self.type_filter = ""
         self.due_filter = "All"  # "All", "Overdue", "Due in 30 days"
+        self.recently_modified_days = 0  # 0 = off, >0 = show only updated in last N days
 
     def set_text_filter(self, text: str):
         self.text_filter = (text or "").lower().strip()
@@ -3638,6 +5007,10 @@ class InstrumentFilterProxyModel(QtCore.QSortFilterProxyModel):
         self.due_filter = df or "All"
         self.invalidateFilter()
 
+    def set_recently_modified_days(self, days: int):
+        self.recently_modified_days = max(0, int(days))
+        self.invalidateFilter()
+
     def filterAcceptsRow(self, source_row, source_parent):
         model = self.sourceModel()
         if model is None:
@@ -3651,18 +5024,35 @@ class InstrumentFilterProxyModel(QtCore.QSortFilterProxyModel):
             val = model.data(idx, QtCore.Qt.DisplayRole)
             return "" if val is None else str(val)
 
-        # Text filter on ID, location, destination, instrument type
+        # Text filter: ID, location, destination, instrument type, serial number (fuzzy-friendly)
         if self.text_filter:
-            haystack = " ".join(
-                [
-                    data(0),  # ID
-                    data(1),  # Location
-                    data(3),  # Destination
-                    data(8),  # Instrument type name
-                ]
-            ).lower()
-            if self.text_filter not in haystack:
-                return False
+            haystack_parts = [
+                data(0),  # ID
+                data(1),  # Location
+                data(3),  # Destination
+                data(8),  # Instrument type name
+            ]
+            src = self.sourceModel()
+            if hasattr(src, "get_instrument_at_row"):
+                inst = src.get_instrument_at_row(source_row)
+                if inst and inst.get("serial_number"):
+                    haystack_parts.append(str(inst["serial_number"]))
+            haystack = " ".join(haystack_parts).lower()
+            query = self.text_filter
+            # Exact substring match
+            if query in haystack:
+                pass  # accept
+            else:
+                # Word match: each word in query must appear in haystack
+                words = [w for w in query.split() if len(w) > 0]
+                if words and all(w in haystack for w in words):
+                    pass  # accept
+                else:
+                    # Fuzzy ratio (typo-tolerant)
+                    import difflib
+                    ratio = difflib.SequenceMatcher(None, query, haystack).ratio()
+                    if ratio < 0.45:
+                        return False
 
         # Status filter
         if self.status_filter:
@@ -3689,6 +5079,28 @@ class InstrumentFilterProxyModel(QtCore.QSortFilterProxyModel):
                     return False
             elif self.due_filter == "Due in 30 days":
                 if days < 0 or days > 30:
+                    return False
+
+        # Recently modified filter
+        if self.recently_modified_days > 0:
+            src = self.sourceModel()
+            if hasattr(src, "get_instrument_at_row"):
+                inst = src.get_instrument_at_row(source_row)
+                if inst and inst.get("updated_at"):
+                    try:
+                        from datetime import datetime, timedelta
+                        raw = inst["updated_at"]
+                        if len(raw) >= 19:
+                            updated = datetime.strptime(raw[:19], "%Y-%m-%d %H:%M:%S")
+                        elif len(raw) >= 10:
+                            updated = datetime.strptime(raw[:10], "%Y-%m-%d")
+                        else:
+                            return False
+                        if updated.replace(tzinfo=None) < datetime.now() - timedelta(days=self.recently_modified_days):
+                            return False
+                    except Exception:
+                        return False
+                else:
                     return False
 
         return True
@@ -3770,61 +5182,85 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_dest = QtWidgets.QAction("Destinations", self)
         self.act_dest.setToolTip("Manage calibration destinations")
         self.act_dest.triggered.connect(self.on_destinations)
+
+        self.act_personnel = QtWidgets.QAction("Personnel", self)
+        self.act_personnel.setToolTip("Manage personnel (technicians authorized to perform calibrations)")
+        self.act_personnel.triggered.connect(self.on_personnel)
         
         self.act_reminders = QtWidgets.QAction("Send Reminders", self)
         self.act_reminders.setToolTip("Send LAN reminders for due calibrations")
         self.act_reminders.triggered.connect(self.on_send_reminders)
 
+        self.act_batch_update = QtWidgets.QAction("Batch update...", self)
+        self.act_batch_update.setToolTip("Update status or next due date for selected instruments")
+        self.act_batch_update.triggered.connect(self.on_batch_update)
+        self.act_batch_assign_type = QtWidgets.QAction("Batch assign instrument type...", self)
+        self.act_batch_assign_type.setToolTip("Assign the same instrument type to selected instruments")
+        self.act_batch_assign_type.triggered.connect(self.on_batch_assign_type)
+
         # ------------------------------------------------------------------
-        # Menus
+        # Menus (grouped by domain: File, Edit, Calibrations, Tools, View, Help)
         # ------------------------------------------------------------------
         menubar = self.menuBar()
 
-        # File menu - file operations and exports
+        # File - create, export, exit (session/document level)
         file_menu = menubar.addMenu("&File")
         file_menu.addAction(self.act_new)
-        file_menu.addAction(self.act_edit)
-        file_menu.addAction(self.act_delete)
         file_menu.addSeparator()
-        
         export_menu = file_menu.addMenu("&Export")
         export_csv_action = export_menu.addAction("Current view to CSV...")
         export_csv_action.setShortcut(QtGui.QKeySequence("Ctrl+Shift+C"))
         export_csv_action.triggered.connect(self.on_export_csv)
-        
+        export_excel_action = export_menu.addAction("Current view to Excel...")
+        export_excel_action.setShortcut(QtGui.QKeySequence("Ctrl+Shift+E"))
+        export_excel_action.triggered.connect(self.on_export_excel)
+        export_menu.addSeparator()
         export_pdf_action = export_menu.addAction("All calibrations to PDF...")
         export_pdf_action.setShortcut(QtGui.QKeySequence("Ctrl+Shift+P"))
         export_pdf_action.triggered.connect(self.on_export_all_calibrations)
-
+        export_menu.addSeparator()
+        export_internal_action = export_menu.addAction("Export preset: Internal review...")
+        export_internal_action.setToolTip("Export all calibrations to PDF in Internal_Review_<date> subfolder")
+        export_internal_action.triggered.connect(lambda: self._on_export_preset("Internal_Review"))
+        export_audit_action = export_menu.addAction("Export preset: External audit...")
+        export_audit_action.setToolTip("Export all calibrations to PDF in External_Audit_<date> subfolder")
+        export_audit_action.triggered.connect(lambda: self._on_export_preset("External_Audit"))
+        export_customer_action = export_menu.addAction("Export preset: Customer delivery...")
+        export_customer_action.setToolTip("Export all calibrations to PDF in Customer_<date> subfolder")
+        export_customer_action.triggered.connect(lambda: self._on_export_preset("Customer"))
         file_menu.addSeparator()
         exit_action = file_menu.addAction("E&xit")
         exit_action.setShortcut(QtGui.QKeySequence.Quit)
         exit_action.triggered.connect(self.close)
 
-        # Edit menu - editing and viewing
+        # Edit - selection actions (edit, view, batch, delete)
         edit_menu = menubar.addMenu("&Edit")
         edit_menu.addAction(self.act_edit)
         edit_menu.addAction(self.act_view_info)
         edit_menu.addSeparator()
+        edit_menu.addAction(self.act_batch_update)
+        edit_menu.addAction(self.act_batch_assign_type)
+        edit_menu.addSeparator()
         edit_menu.addAction(self.act_delete)
 
-        # Calibrations menu - all calibration-related actions
+        # Calibrations - calibration records and procedures
         cal_menu = menubar.addMenu("&Calibrations")
         cal_menu.addAction(self.act_cal)
         cal_menu.addAction(self.act_hist)
         cal_menu.addSeparator()
         cal_menu.addAction(self.act_templates)
 
-        # Tools menu - management and utilities
+        # Tools - reference data and operations
         tools_menu = menubar.addMenu("&Tools")
         tools_menu.addAction(self.act_dest)
+        tools_menu.addAction(self.act_personnel)
         tools_menu.addAction(self.act_reminders)
         tools_menu.addSeparator()
         tools_menu.addAction(self.act_settings)
-        
-        # Help menu
-        help_menu = menubar.addMenu("&Help")
-        theme_sub = help_menu.addMenu("&Theme")
+
+        # View - appearance (theme, text size)
+        view_menu = menubar.addMenu("&View")
+        theme_sub = view_menu.addMenu("&Theme")
         self._theme_action_group = QtWidgets.QActionGroup(self)
         self._theme_action_group.setExclusive(True)
         current_theme = get_saved_theme()
@@ -3834,7 +5270,7 @@ class MainWindow(QtWidgets.QMainWindow):
             act.setChecked(theme_name == current_theme)
             act.triggered.connect(lambda checked, n=theme_name: self._on_theme_selected(n))
             self._theme_action_group.addAction(act)
-        text_size_sub = help_menu.addMenu("&Text Size")
+        text_size_sub = view_menu.addMenu("&Text Size")
         self._text_size_action_group = QtWidgets.QActionGroup(self)
         self._text_size_action_group.setExclusive(True)
         current_pt = get_saved_font_size()
@@ -3845,17 +5281,45 @@ class MainWindow(QtWidgets.QMainWindow):
             act.setData(pt)
             act.triggered.connect(lambda checked, p=pt: self._on_text_size_selected(p))
             self._text_size_action_group.addAction(act)
-        help_menu.addSeparator()
-        refresh_db_action = help_menu.addAction("Refresh database (reconnect to server)")
-        refresh_db_action.setToolTip("Try to reconnect to the server database if the app is using the local one")
-        refresh_db_action.triggered.connect(self._on_refresh_database)
-        help_menu.addSeparator()
+
+        # Help - documentation, refresh, about
+        help_menu = menubar.addMenu("&Help")
         shortcuts_action = help_menu.addAction("Keyboard Shortcuts...")
         shortcuts_action.setShortcut(QtGui.QKeySequence("F1"))
         shortcuts_action.triggered.connect(self.on_show_shortcuts)
         help_menu.addSeparator()
+        refresh_db_action = help_menu.addAction("Refresh database (reconnect to server)")
+        refresh_db_action.setToolTip("Reconnect to the server database (app uses server only, no local copy).")
+        refresh_db_action.triggered.connect(self._on_refresh_database)
+        help_menu.addSeparator()
         about_action = help_menu.addAction("About...")
         about_action.triggered.connect(self.on_show_about)
+
+        # ------------------------------------------------------------------
+        # Needs Attention panel (overdue, due soon, recently modified)
+        # ------------------------------------------------------------------
+        self._needs_attention_container = QtWidgets.QWidget()
+        needs_layout = QtWidgets.QHBoxLayout(self._needs_attention_container)
+        needs_layout.setContentsMargins(8, 4, 8, 4)
+        needs_layout.addWidget(QtWidgets.QLabel("Needs Attention:"))
+        self._btn_overdue = QtWidgets.QPushButton("Overdue (0)")
+        self._btn_overdue.setToolTip("Show instruments past due date")
+        self._btn_overdue.clicked.connect(self._on_needs_attention_overdue)
+        needs_layout.addWidget(self._btn_overdue)
+        self._btn_due_soon = QtWidgets.QPushButton("Due soon (0)")
+        self._btn_due_soon.setToolTip("Show instruments due within 30 days")
+        self._btn_due_soon.clicked.connect(self._on_needs_attention_due_soon)
+        needs_layout.addWidget(self._btn_due_soon)
+        self._btn_recently_modified = QtWidgets.QPushButton("Recently modified (0)")
+        self._btn_recently_modified.setToolTip("Show instruments modified in the last 7 days")
+        self._btn_recently_modified.clicked.connect(self._on_needs_attention_recently_modified)
+        needs_layout.addWidget(self._btn_recently_modified)
+        self._btn_clear_attention = QtWidgets.QPushButton("Clear")
+        self._btn_clear_attention.setToolTip("Clear Needs Attention filter")
+        self._btn_clear_attention.clicked.connect(self._on_needs_attention_clear)
+        needs_layout.addWidget(self._btn_clear_attention)
+        needs_layout.addStretch(1)
+        layout.addWidget(self._needs_attention_container)
 
         # ------------------------------------------------------------------
         # Filters row with better layout
@@ -3916,6 +5380,12 @@ class MainWindow(QtWidgets.QMainWindow):
         clear_filters_btn.clicked.connect(self._clear_filters)
         filters_layout.addWidget(clear_filters_btn)
 
+        # Show archived instruments (soft-deleted)
+        self.show_archived_check = QtWidgets.QCheckBox("Show archived")
+        self.show_archived_check.setToolTip("Include archived (soft-deleted) instruments in the list")
+        self.show_archived_check.toggled.connect(self.load_instruments)
+        filters_layout.addWidget(self.show_archived_check)
+
         layout.addWidget(filters_container)
 
         # ------------------------------------------------------------------
@@ -3929,7 +5399,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.table.setModel(self.proxy)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.table.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSortingEnabled(True)
         self.table.doubleClicked.connect(self.on_table_double_clicked)
@@ -3999,20 +5469,67 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("Calibration Tracker")
 
     def load_instruments(self):
-        instruments = self.repo.list_instruments()
+        include_archived = getattr(
+            self, "show_archived_check", None
+        ) and self.show_archived_check.isChecked()
+        instruments = self.repo.list_instruments(include_archived=include_archived)
         self.model.set_instruments(instruments)
         count = len(instruments)
 
         self._update_window_title()
         self.statusBar().showMessage(f"Loaded {count} instrument(s)", 3000)
         self._update_statistics()
+        self._update_needs_attention_counts()
     
+    def _update_needs_attention_counts(self):
+        """Refresh Overdue / Due soon / Recently modified counts."""
+        include_archived = getattr(
+            self, "show_archived_check", None
+        ) and self.show_archived_check.isChecked()
+        try:
+            n_overdue = len(self.repo.get_overdue_instruments(include_archived=include_archived))
+            n_due_soon = len(self.repo.get_due_soon_instruments(30, include_archived=include_archived))
+            n_recent = len(self.repo.get_recently_modified_instruments(7, include_archived=include_archived))
+        except Exception:
+            n_overdue = n_due_soon = n_recent = 0
+        self._btn_overdue.setText(f"Overdue ({n_overdue})")
+        self._btn_due_soon.setText(f"Due soon ({n_due_soon})")
+        self._btn_recently_modified.setText(f"Recently modified ({n_recent})")
+
+    def _on_needs_attention_overdue(self):
+        self.due_filter_combo.setCurrentText("Overdue")
+        self.proxy.set_recently_modified_days(0)
+        self._on_filters_changed()
+        self.statusBar().showMessage("Showing overdue instruments", 2000)
+
+    def _on_needs_attention_due_soon(self):
+        self.due_filter_combo.setCurrentText("Due in 30 days")
+        self.proxy.set_recently_modified_days(0)
+        self._on_filters_changed()
+        self.statusBar().showMessage("Showing instruments due within 30 days", 2000)
+
+    def _on_needs_attention_recently_modified(self):
+        self.due_filter_combo.setCurrentIndex(0)  # All
+        self.proxy.set_due_filter("All")
+        self.proxy.set_recently_modified_days(7)
+        self._on_filters_changed()
+        self.statusBar().showMessage("Showing instruments modified in last 7 days", 2000)
+
+    def _on_needs_attention_clear(self):
+        self.due_filter_combo.setCurrentIndex(0)
+        self.proxy.set_due_filter("All")
+        self.proxy.set_recently_modified_days(0)
+        self._on_filters_changed()
+        self.statusBar().showMessage("Needs Attention filter cleared", 2000)
+
     def _clear_filters(self):
         """Clear all filters and reset search."""
         self.search_edit.clear()
         self.status_filter_combo.setCurrentIndex(0)
         self.type_filter_combo.setCurrentIndex(0)
         self.due_filter_combo.setCurrentIndex(0)
+        self.proxy.set_recently_modified_days(0)
+        self._on_filters_changed()
         self.statusBar().showMessage("Filters cleared", 2000)
     
     def _update_status_bar(self):
@@ -4040,12 +5557,17 @@ class MainWindow(QtWidgets.QMainWindow):
         menu = QtWidgets.QMenu(self)
         
         inst_id = self._selected_instrument_id()
+        ids = self._selected_instrument_ids()
         if inst_id:
             menu.addAction(self.act_edit)
             menu.addAction(self.act_view_info)
             menu.addSeparator()
             menu.addAction(self.act_cal)
             menu.addAction(self.act_hist)
+            if len(ids) > 1:
+                menu.addSeparator()
+                menu.addAction(self.act_batch_update)
+                menu.addAction(self.act_batch_assign_type)
             menu.addSeparator()
             menu.addAction(self.act_delete)
         else:
@@ -4073,6 +5595,19 @@ class MainWindow(QtWidgets.QMainWindow):
         src_idx = self.proxy.mapToSource(idx)
         row = src_idx.row()
         return self.model.get_instrument_id(row)
+
+    def _selected_instrument_ids(self):
+        """Return list of instrument IDs for all currently selected rows (multi-select)."""
+        ids = []
+        for idx in self.table.selectionModel().selectedRows():
+            if not idx.isValid():
+                continue
+            src_idx = self.proxy.mapToSource(idx)
+            row = src_idx.row()
+            iid = self.model.get_instrument_id(row)
+            if iid and iid not in ids:
+                ids.append(iid)
+        return ids
 
     def on_table_double_clicked(self, index: QtCore.QModelIndex):
         if not index.isValid():
@@ -4103,6 +5638,60 @@ class MainWindow(QtWidgets.QMainWindow):
                         "Creation failed",
                         f"Failed to create instrument:\n{str(e)}",
                     )
+
+    def on_batch_update(self):
+        ids = self._selected_instrument_ids()
+        if not ids:
+            QtWidgets.QMessageBox.information(
+                self,
+                "No selection",
+                "Please select one or more instruments (Ctrl+click or Shift+click for multi-select).",
+            )
+            return
+        dlg = BatchUpdateDialog(len(ids), parent=self)
+        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+            return
+        updates, reason = dlg.get_update()
+        if not updates:
+            return
+        try:
+            self.repo.batch_update_instruments(ids, updates, reason=reason)
+            self.load_instruments()
+            self.statusBar().showMessage(f"Updated {len(ids)} instrument(s)", 3000)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Batch update failed",
+                str(e),
+            )
+
+    def on_batch_assign_type(self):
+        ids = self._selected_instrument_ids()
+        if not ids:
+            QtWidgets.QMessageBox.information(
+                self,
+                "No selection",
+                "Please select one or more instruments (Ctrl+click or Shift+click for multi-select).",
+            )
+            return
+        dlg = BatchAssignInstrumentTypeDialog(self.repo, len(ids), parent=self)
+        if dlg.exec_() != QtWidgets.QDialog.Accepted:
+            return
+        type_id, reason = dlg.get_result()
+        try:
+            self.repo.batch_update_instruments(
+                ids, {"instrument_type_id": type_id}, reason=reason
+            )
+            self.load_instruments()
+            self.statusBar().showMessage(
+                f"Assigned instrument type to {len(ids)} instrument(s)", 3000
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Batch assign instrument type failed",
+                str(e),
+            )
 
     def on_edit(self):
         inst_id = self._selected_instrument_id()
@@ -4158,8 +5747,19 @@ class MainWindow(QtWidgets.QMainWindow):
         if resp != QtWidgets.QMessageBox.Yes:
             return
 
+        reason, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Reason for deletion",
+            "Reason (optional, for audit log):",
+            QtWidgets.QLineEdit.Normal,
+            "",
+        )
+        if not ok:
+            return
+        reason = reason.strip() or None
+
         try:
-            self.repo.delete_instrument(inst_id)
+            self.repo.delete_instrument(inst_id, reason=reason)
             self.load_instruments()
             self.statusBar().showMessage(f"Deleted instrument '{tag}'", 3000)
         except Exception as e:
@@ -4212,6 +5812,10 @@ class MainWindow(QtWidgets.QMainWindow):
         dlg.exec_()
         # Refresh instrument list so new/renamed destinations show up in table
         self.load_instruments()
+
+    def on_personnel(self):
+        dlg = PersonnelDialog(self.repo, parent=self)
+        dlg.exec_()
 
     def on_cal_history(self):
         inst_id = self._selected_instrument_id()
@@ -4300,6 +5904,111 @@ class MainWindow(QtWidgets.QMainWindow):
                 self,
                 "Export failed",
                 str(e),
+            )
+
+    def on_export_excel(self):
+        """Export current (filtered) instrument view to XLSX using openpyxl."""
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export current view to Excel",
+            "",
+            "Excel files (*.xlsx);;All files (*)",
+        )
+        if not path:
+            return
+        if not path.endswith(".xlsx"):
+            path = path + ".xlsx"
+        try:
+            from openpyxl import Workbook
+            wb = Workbook()
+            ws = wb.active
+            if ws is None:
+                ws = wb.create_sheet("Instruments", 0)
+            ws.title = "Instruments"
+            # Headers
+            headers = [
+                self.proxy.headerData(c, QtCore.Qt.Horizontal, QtCore.Qt.DisplayRole)
+                for c in range(self.proxy.columnCount())
+            ]
+            for col, h in enumerate(headers, 1):
+                ws.cell(row=1, column=col, value=h or "")
+            # Rows (filtered/sorted view)
+            for row in range(self.proxy.rowCount()):
+                for col in range(self.proxy.columnCount()):
+                    idx = self.proxy.index(row, col)
+                    val = self.proxy.data(idx, QtCore.Qt.DisplayRole)
+                    ws.cell(row=row + 2, column=col + 1, value="" if val is None else str(val))
+            wb.save(path)
+            QtWidgets.QMessageBox.information(
+                self,
+                "Export complete",
+                f"Exported {self.proxy.rowCount()} row(s) to:\n{path}",
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Export failed",
+                str(e),
+            )
+
+    def _on_export_preset(self, preset_name: str):
+        """Export all calibrations to PDF in a preset subfolder (e.g. Internal_Review_2025-01-29)."""
+        base_dir = QtWidgets.QFileDialog.getExistingDirectory(
+            self,
+            f"Select directory for '{preset_name}' export",
+            "",
+            QtWidgets.QFileDialog.ShowDirsOnly | QtWidgets.QFileDialog.DontResolveSymlinks,
+        )
+        if not base_dir:
+            return
+        subfolder = f"{preset_name}_{date.today().isoformat()}"
+        import os
+        target_dir = os.path.join(base_dir, subfolder)
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Export preset",
+            f"Export all calibration records to PDF in:\n{target_dir}\n\nContinue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        progress = QtWidgets.QProgressDialog(
+            "Exporting calibrations...",
+            "Cancel",
+            0,
+            0,
+            self,
+        )
+        progress.setWindowModality(QtCore.Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.show()
+        QtWidgets.QApplication.processEvents()
+        try:
+            from pdf_export import export_all_calibrations_to_directory
+            result = export_all_calibrations_to_directory(self.repo, target_dir)
+            progress.close()
+            msg = (
+                f"Export complete!\n\n"
+                f"Successfully exported: {result['success_count']} calibration(s)\n"
+                f"Attachments exported: {result.get('attachment_count', 0)}\n"
+                f"Errors: {result['error_count']}"
+            )
+            if result.get("errors"):
+                error_details = "\n".join(result["errors"][:10])
+                if len(result["errors"]) > 10:
+                    error_details += f"\n... and {len(result['errors']) - 10} more errors"
+                msg += f"\n\nErrors:\n{error_details}"
+            if result["error_count"] > 0:
+                QtWidgets.QMessageBox.warning(self, "Export complete with errors", msg)
+            else:
+                QtWidgets.QMessageBox.information(self, "Export complete", msg)
+        except Exception as e:
+            progress.close()
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Export failed",
+                f"Error exporting calibrations:\n{str(e)}",
             )
     
     def on_export_all_calibrations(self):
@@ -4477,38 +6186,51 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_refresh_database(self):
         """Try to reconnect to the server database; refresh UI if successful."""
+        # Use shorter timeout so UI doesn't hang long if server is unreachable (10s instead of 30s).
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
-            new_conn = get_connection(DB_PATH)
-        except Exception as e:
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Refresh database",
-                f"Could not connect to the server database:\n{e}\n\nStill using current database.",
-            )
-            return
-        if get_effective_db_path() != DB_PATH:
-            new_conn.close()
+            try:
+                new_conn = get_connection(DB_PATH, timeout=10.0)
+            except Exception as e:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Refresh database",
+                    f"Could not connect to the server database:\n{e}\n\nStill using current database.",
+                )
+                return
+            try:
+                # Initialize schema on the new connection (same as startup).
+                from database import initialize_db
+                new_conn = initialize_db(new_conn, DB_PATH)
+            except Exception as e:
+                try:
+                    new_conn.close()
+                except Exception:
+                    pass
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Refresh database",
+                    f"Database initialization failed:\n{e}\n\nStill using current database.",
+                )
+                return
+            # Close old connection first so we don't hold two connections.
+            old_conn = self.repo.conn
+            try:
+                old_conn.close()
+            except Exception:
+                pass
+            self.repo = CalibrationRepository(new_conn)
+            persist_last_db_path(get_effective_db_path())
+            self.load_instruments()
+            self._update_window_title()
+            self._update_statistics()
             QtWidgets.QMessageBox.information(
                 self,
                 "Refresh database",
-                "Could not connect to the server database (e.g. network unavailable).\n\nStill using local database.",
+                "Reconnected to the server database. Data has been reloaded.",
             )
-            return
-        try:
-            old_conn = self.repo.conn
-            old_conn.close()
-        except Exception:
-            pass
-        self.repo = CalibrationRepository(new_conn)
-        persist_last_db_path(get_effective_db_path())
-        self.load_instruments()
-        self._update_window_title()
-        self._update_statistics()
-        QtWidgets.QMessageBox.information(
-            self,
-            "Refresh database",
-            "Reconnected to the server database. Data has been reloaded.",
-        )
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
 
     def on_show_shortcuts(self):
         """Show keyboard shortcuts dialog."""
