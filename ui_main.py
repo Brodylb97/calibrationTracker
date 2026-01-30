@@ -1816,11 +1816,11 @@ class TemplateEditDialog(QtWidgets.QDialog):
             item.setSelected(item.data(QtCore.Qt.UserRole) in active_ids)
 
     def _update_template_lock_state(self):
-        """M8: Lock name/version/notes when status is Approved."""
+        """M8: Lock version/notes when status is Approved; name stays editable so template is renameable."""
         status = self.status_combo.currentText() if hasattr(self, "status_combo") else "Draft"
         locked = status == "Approved"
         if hasattr(self, "name_edit"):
-            self.name_edit.setReadOnly(locked)
+            self.name_edit.setReadOnly(False)
         if hasattr(self, "version_spin"):
             self.version_spin.setReadOnly(locked)
         if hasattr(self, "notes_edit"):
