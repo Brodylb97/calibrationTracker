@@ -111,7 +111,23 @@ def get_connection(db_path: Path | None = None, timeout: float = 30.0):
             "Local copies are not used."
         )
     _effective_db_path = db_path
-    conn = sqlite3.connect(str(db_path), timeout=timeout)
+    parent = db_path.parent
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=timeout)
+    except sqlite3.OperationalError as e:
+        if "unable to open database file" in str(e).lower():
+            raise sqlite3.OperationalError(
+                f"Could not open database at:\n{db_path}\n\n"
+                "Check that:\n"
+                "• The drive (e.g. Z:) is connected and the path is accessible\n"
+                "• The folder exists (or that the app can create it)\n"
+                "• You have read and write permission for that location"
+            ) from e
+        raise
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn

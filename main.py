@@ -141,6 +141,22 @@ def main():
                 conn = initialize_db(conn, db_path)
                 break
             except sqlite3.OperationalError as e:
+                err_lower = str(e).lower()
+                if "unable to open database file" in err_lower:
+                    logger.error("Database file not openable: %s", e)
+                    try:
+                        from PyQt5.QtWidgets import QApplication, QMessageBox
+                        app = QApplication.instance()
+                        if app is None:
+                            app = QApplication(sys.argv)
+                        QMessageBox.critical(
+                            None,
+                            "Cannot open database",
+                            str(e) + "\n\nExiting.",
+                        )
+                    except Exception:
+                        print(str(e), file=sys.stderr)
+                    sys.exit(1)
                 if not _is_readonly_db_error(e):
                     raise
                 logger.warning("Database read-only: %s", e)
