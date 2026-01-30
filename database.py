@@ -410,6 +410,9 @@ def _initialize_db_core(conn: sqlite3.Connection) -> None:
         cur.execute("ALTER TABLE calibration_template_fields ADD COLUMN calc_ref1_name TEXT")
     if "calc_ref2_name" not in cols:
         cur.execute("ALTER TABLE calibration_template_fields ADD COLUMN calc_ref2_name TEXT")
+    for ref_col in ("calc_ref3_name", "calc_ref4_name", "calc_ref5_name"):
+        if ref_col not in cols:
+            cur.execute(f"ALTER TABLE calibration_template_fields ADD COLUMN {ref_col} TEXT")
     if "tolerance" not in cols:
         cur.execute("ALTER TABLE calibration_template_fields ADD COLUMN tolerance REAL")
     if "autofill_from_first_group" not in cols:
@@ -1011,6 +1014,9 @@ class CalibrationRepository:
         calc_type: str | None = None,
         calc_ref1_name: str | None = None,
         calc_ref2_name: str | None = None,
+        calc_ref3_name: str | None = None,
+        calc_ref4_name: str | None = None,
+        calc_ref5_name: str | None = None,
         tolerance: float | None = None,
         autofill_from_first_group: bool = False,
         default_value: str | None = None,
@@ -1026,6 +1032,10 @@ class CalibrationRepository:
         cur = self.conn.cursor()
         cur.execute("PRAGMA table_info(calibration_template_fields)")
         cols = [r[1] for r in cur.fetchall()]
+        has_ref3 = "calc_ref3_name" in cols
+        ref3_sql = ", calc_ref3_name, calc_ref4_name, calc_ref5_name" if has_ref3 else ""
+        ref3_ph = ", ?, ?, ?" if has_ref3 else ""
+        ref3_vals = (calc_ref3_name, calc_ref4_name, calc_ref5_name) if has_ref3 else ()
         if "tolerance_type" in cols:
             if "tolerance_lookup_json" in cols:
                 cur.execute(
@@ -1033,10 +1043,10 @@ class CalibrationRepository:
                     INSERT INTO calibration_template_fields
                         (template_id, name, label, data_type, unit,
                          required, sort_order, group_name,
-                         calc_type, calc_ref1_name, calc_ref2_name,
+                         calc_type, calc_ref1_name, calc_ref2_name""" + ref3_sql + """,
                          tolerance, autofill_from_first_group, default_value,
                          tolerance_type, tolerance_equation, nominal_value, tolerance_lookup_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?""" + ref3_ph + """, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         template_id,
@@ -1050,6 +1060,7 @@ class CalibrationRepository:
                         calc_type,
                         calc_ref1_name,
                         calc_ref2_name,
+                        *ref3_vals,
                         tolerance,
                         1 if autofill_from_first_group else 0,
                         default_value,
@@ -1065,10 +1076,10 @@ class CalibrationRepository:
                     INSERT INTO calibration_template_fields
                         (template_id, name, label, data_type, unit,
                          required, sort_order, group_name,
-                         calc_type, calc_ref1_name, calc_ref2_name,
+                         calc_type, calc_ref1_name, calc_ref2_name""" + ref3_sql + """,
                          tolerance, autofill_from_first_group, default_value,
                          tolerance_type, tolerance_equation, nominal_value)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?""" + ref3_ph + """, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         template_id,
@@ -1082,6 +1093,7 @@ class CalibrationRepository:
                         calc_type,
                         calc_ref1_name,
                         calc_ref2_name,
+                        *ref3_vals,
                         tolerance,
                         1 if autofill_from_first_group else 0,
                         default_value,
@@ -1096,9 +1108,9 @@ class CalibrationRepository:
                 INSERT INTO calibration_template_fields
                     (template_id, name, label, data_type, unit,
                      required, sort_order, group_name,
-                     calc_type, calc_ref1_name, calc_ref2_name,
+                     calc_type, calc_ref1_name, calc_ref2_name""" + ref3_sql + """,
                      tolerance, autofill_from_first_group, default_value)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?""" + ref3_ph + """, ?, ?, ?)
                 """,
                 (
                     template_id,
@@ -1112,6 +1124,7 @@ class CalibrationRepository:
                     calc_type,
                     calc_ref1_name,
                     calc_ref2_name,
+                    *ref3_vals,
                     tolerance,
                     1 if autofill_from_first_group else 0,
                     default_value,
@@ -1163,6 +1176,11 @@ class CalibrationRepository:
             params["tolerance_type"] = data.get("tolerance_type")
             params["tolerance_equation"] = data.get("tolerance_equation")
             params["nominal_value"] = data.get("nominal_value")
+        if "calc_ref3_name" in cols:
+            set_clause += ", calc_ref3_name = :calc_ref3_name, calc_ref4_name = :calc_ref4_name, calc_ref5_name = :calc_ref5_name"
+            params["calc_ref3_name"] = data.get("calc_ref3_name")
+            params["calc_ref4_name"] = data.get("calc_ref4_name")
+            params["calc_ref5_name"] = data.get("calc_ref5_name")
         if "tolerance_lookup_json" in cols:
             set_clause += ", tolerance_lookup_json = :tolerance_lookup_json"
             params["tolerance_lookup_json"] = data.get("tolerance_lookup_json")
@@ -1258,7 +1276,8 @@ class CalibrationRepository:
         cur.execute("PRAGMA table_info(calibration_template_fields)")
         field_cols = {r[1] for r in cur.fetchall()}
         extra = []
-        for col in ("tolerance_type", "tolerance_equation", "nominal_value", "tolerance_lookup_json"):
+        for col in ("tolerance_type", "tolerance_equation", "nominal_value", "tolerance_lookup_json",
+                    "calc_ref3_name", "calc_ref4_name", "calc_ref5_name"):
             if col in field_cols:
                 extra.append(f"f.{col}")
         extra_sql = ", " + ", ".join(extra) if extra else ""

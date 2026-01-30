@@ -220,7 +220,7 @@ def evaluate_tolerance_lookup(
 
 
 # Allowed variable names for equation validation (extend as needed)
-ALLOWED_VARIABLES = {"nominal", "reading", "ref1", "ref2", "ref", "value", "abs_nominal"}
+ALLOWED_VARIABLES = {"nominal", "reading", "ref1", "ref2", "ref3", "ref4", "ref5", "ref", "value", "abs_nominal"}
 
 
 def validate_equation_variables(equation: str) -> tuple[bool, list[str]]:

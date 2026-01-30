@@ -1935,10 +1935,16 @@ class FieldEditDialog(QtWidgets.QDialog):
         self.calc_type_combo.addItem(
             "Percent difference (|V1 - V2| / avg(V1,V2) * 100)", "PCT_DIFF"
         )
+        self.calc_type_combo.addItem("Min of measurements (3–5 fields)", "MIN_OF")
+        self.calc_type_combo.addItem("Max of measurements (3–5 fields)", "MAX_OF")
+        self.calc_type_combo.addItem("Range (max − min of 3–5 fields)", "RANGE_OF")
 
         self.ref1_combo = QtWidgets.QComboBox()
         self.ref2_combo = QtWidgets.QComboBox()
-        for cb in (self.ref1_combo, self.ref2_combo):
+        self.ref3_combo = QtWidgets.QComboBox()
+        self.ref4_combo = QtWidgets.QComboBox()
+        self.ref5_combo = QtWidgets.QComboBox()
+        for cb in (self.ref1_combo, self.ref2_combo, self.ref3_combo, self.ref4_combo, self.ref5_combo):
             cb.addItem("", None)
             for f in self.existing_fields:
                 cb.addItem(f["name"], f["name"])
@@ -1946,6 +1952,9 @@ class FieldEditDialog(QtWidgets.QDialog):
         calc_type = self.field.get("calc_type")
         ref1 = self.field.get("calc_ref1_name")
         ref2 = self.field.get("calc_ref2_name")
+        ref3 = self.field.get("calc_ref3_name")
+        ref4 = self.field.get("calc_ref4_name")
+        ref5 = self.field.get("calc_ref5_name")
 
         if calc_type:
             idx = self.calc_type_combo.findData(calc_type)
@@ -2008,7 +2017,7 @@ class FieldEditDialog(QtWidgets.QDialog):
         self.tol_equation_edit.setMinimumWidth(_min_field_w)
         self.tol_equation_edit.setPlaceholderText("e.g. 0.02 * abs(nominal)")
         self.tol_equation_edit.setToolTip(
-            "L3: Use + - * / ** and abs(), min(), max(), round(). Variables: nominal, reading, ref1, ref2. "
+            "L3: Use + - * / ** and abs(), min(), max(), round(). Variables: nominal, reading, ref1..ref5. "
             "Example: 0.02 * abs(nominal) gives ±2% of nominal. What does this mean? Click Help."
         )
         self.tol_equation_label = QtWidgets.QLabel("Tolerance equation")
@@ -2056,6 +2065,9 @@ class FieldEditDialog(QtWidgets.QDialog):
         form.addRow("Calculation", self.calc_type_combo)
         form.addRow("Value 1 field", self.ref1_combo)
         form.addRow("Value 2 field", self.ref2_combo)
+        form.addRow("Value 3 field (optional)", self.ref3_combo)
+        form.addRow("Value 4 field (optional)", self.ref4_combo)
+        form.addRow("Value 5 field (optional)", self.ref5_combo)
         form.addRow("Tolerance type", self.tol_type_combo)
         self.tol_type_hint = QtWidgets.QLabel(
             "Choose \"Equation\" to define a formula (e.g. 0.02 * abs(nominal)); "
@@ -2270,7 +2282,7 @@ class FieldEditDialog(QtWidgets.QDialog):
             parse_equation(eq)
             ok, unknown = validate_equation_variables(eq)
             if not ok:
-                self.tol_validation_label.setText(f"Unknown variables: {', '.join(unknown)}. Allowed: nominal, reading, ref1, ref2, ref, value, abs_nominal.")
+                self.tol_validation_label.setText(f"Unknown variables: {', '.join(unknown)}. Allowed: nominal, reading, ref1..ref5, ref, value, abs_nominal.")
             else:
                 self.tol_validation_label.setText("✓ Valid")
                 self.tol_validation_label.setStyleSheet("color: #080; font-size: 0.9em;")
@@ -2323,6 +2335,9 @@ class FieldEditDialog(QtWidgets.QDialog):
         calc_type = self.calc_type_combo.currentData()
         ref1_name = self.ref1_combo.currentData()
         ref2_name = self.ref2_combo.currentData()
+        ref3_name = self.ref3_combo.currentData()
+        ref4_name = self.ref4_combo.currentData()
+        ref5_name = self.ref5_combo.currentData()
 
         if calc_type in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF"):
             if not ref1_name or not ref2_name or ref1_name == ref2_name:
@@ -2330,6 +2345,22 @@ class FieldEditDialog(QtWidgets.QDialog):
                     self,
                     "Validation",
                     "For this calculation, select two different source fields.",
+                )
+                return None
+        if calc_type in ("MIN_OF", "MAX_OF", "RANGE_OF"):
+            refs = [r for r in (ref1_name, ref2_name, ref3_name, ref4_name, ref5_name) if r]
+            if len(refs) < 2:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Validation",
+                    "For Min/Max/Range of measurements, select at least two source fields (Value 1–5).",
+                )
+                return None
+            if len(refs) != len(set(refs)):
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Validation",
+                    "Select different source fields for each value (no duplicates).",
                 )
                 return None
 
@@ -2355,7 +2386,7 @@ class FieldEditDialog(QtWidgets.QDialog):
                         QtWidgets.QMessageBox.warning(
                             self, "Validation",
                             f"Equation uses unknown variables: {', '.join(unknown)}. "
-                            "Allowed: nominal, reading, ref1, ref2, ref, value, abs_nominal.",
+                            "Allowed: nominal, reading, ref1..ref5, ref, value, abs_nominal.",
                         )
                         return None
                 except ValueError as e:
@@ -2405,6 +2436,9 @@ class FieldEditDialog(QtWidgets.QDialog):
             "calc_type": calc_type,
             "calc_ref1_name": ref1_name,
             "calc_ref2_name": ref2_name,
+            "calc_ref3_name": ref3_name,
+            "calc_ref4_name": ref4_name,
+            "calc_ref5_name": ref5_name,
             "tolerance": tol,
             "tolerance_type": tol_type,
             "tolerance_equation": tolerance_equation,
@@ -2626,6 +2660,15 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                     r1 = f.get("calc_ref1_name") or "?"
                     r2 = f.get("calc_ref2_name") or "?"
                     calc_desc = f"|{r1} - {r2}| / avg * 100"
+                elif f.get("calc_type") == "MIN_OF":
+                    refs = [f.get(f"calc_ref{i}_name") for i in range(1, 6) if f.get(f"calc_ref{i}_name")]
+                    calc_desc = "min(" + ", ".join(refs or ["?"]) + ")"
+                elif f.get("calc_type") == "MAX_OF":
+                    refs = [f.get(f"calc_ref{i}_name") for i in range(1, 6) if f.get(f"calc_ref{i}_name")]
+                    calc_desc = "max(" + ", ".join(refs or ["?"]) + ")"
+                elif f.get("calc_type") == "RANGE_OF":
+                    refs = [f.get(f"calc_ref{i}_name") for i in range(1, 6) if f.get(f"calc_ref{i}_name")]
+                    calc_desc = "max-min(" + ", ".join(refs or ["?"]) + ")"
 
                 tol = f.get("tolerance")
                 tol_type = f.get("tolerance_type") or "fixed"
@@ -2711,6 +2754,9 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
             data["calc_type"],
             data["calc_ref1_name"],
             data["calc_ref2_name"],
+            data.get("calc_ref3_name"),
+            data.get("calc_ref4_name"),
+            data.get("calc_ref5_name"),
             data["tolerance"],
             data.get("autofill_from_first_group", False),
             data.get("default_value"),
@@ -2814,11 +2860,11 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
             f = field_by_id.get(fid)
             if not f:
                 continue
-            # Bool tolerance applies to bool fields; other types apply to ABS_DIFF/PCT_ERROR/PCT_DIFF
+            # Bool tolerance applies to bool fields; other types apply to ABS_DIFF/PCT_DIFF/MIN_OF/MAX_OF/RANGE_OF
             if tol_type == "bool":
                 if f.get("data_type") != "bool":
                     continue
-            elif f.get("calc_type") not in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF"):
+            elif f.get("calc_type") not in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF", "MIN_OF", "MAX_OF", "RANGE_OF"):
                 continue
             data = dict(f)
             data["tolerance_type"] = tol_type
@@ -2969,11 +3015,20 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
             ref2 = f.get("calc_ref2_name")
             tol = f.get("tolerance")
 
-            if calc_type in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF") and old_suffix and new_suffix:
+            ref3 = f.get("calc_ref3_name")
+            ref4 = f.get("calc_ref4_name")
+            ref5 = f.get("calc_ref5_name")
+            if calc_type in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF", "MIN_OF", "MAX_OF", "RANGE_OF") and old_suffix and new_suffix:
                 if ref1:
                     ref1 = ref1.replace(old_suffix, new_suffix)
                 if ref2:
                     ref2 = ref2.replace(old_suffix, new_suffix)
+                if ref3:
+                    ref3 = ref3.replace(old_suffix, new_suffix)
+                if ref4:
+                    ref4 = ref4.replace(old_suffix, new_suffix)
+                if ref5:
+                    ref5 = ref5.replace(old_suffix, new_suffix)
 
             self.repo.add_template_field(
                 self.template_id,
@@ -2987,6 +3042,9 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                 calc_type,
                 ref1,
                 ref2,
+                ref3,
+                ref4,
+                ref5,
                 tol,
                 bool(f.get("autofill_from_first_group", 0)),
                 f.get("default_value"),
@@ -3290,8 +3348,8 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
             prefix = f"{group}, " if group else ""
             unit_str = f" {unit}" if unit else ""
 
-            # 1) Computed difference fields (ABS_DIFF, PCT_ERROR, PCT_DIFF) with tolerance
-            if calc_type in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF"):
+            # 1) Computed difference fields (ABS_DIFF, PCT_ERROR, PCT_DIFF, MIN_OF, MAX_OF, RANGE_OF) with tolerance
+            if calc_type in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF", "MIN_OF", "MAX_OF", "RANGE_OF"):
                 if not val_txt:
                     continue
                 try:
@@ -3314,6 +3372,9 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                 if evaluate_pass_fail and (tol_fixed is not None or v.get("tolerance_equation") or v.get("tolerance_lookup_json")):
                     ref1_name = v.get("calc_ref1_name")
                     ref2_name = v.get("calc_ref2_name")
+                    ref3_name = v.get("calc_ref3_name")
+                    ref4_name = v.get("calc_ref4_name")
+                    ref5_name = v.get("calc_ref5_name")
                     nominal = 0.0
                     nominal_str = v.get("nominal_value")
                     if nominal_str not in (None, ""):
@@ -3322,16 +3383,12 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                         except Exception:
                             pass
                     vars_map = {"nominal": nominal, "reading": diff}
-                    if ref1_name and ref1_name in values_by_name:
-                        try:
-                            vars_map["ref1"] = float(values_by_name[ref1_name] or 0)
-                        except (TypeError, ValueError):
-                            vars_map["ref1"] = 0.0
-                    if ref2_name and ref2_name in values_by_name:
-                        try:
-                            vars_map["ref2"] = float(values_by_name[ref2_name] or 0)
-                        except (TypeError, ValueError):
-                            vars_map["ref2"] = 0.0
+                    for i, r in enumerate((ref1_name, ref2_name, ref3_name, ref4_name, ref5_name), 1):
+                        if r and r in values_by_name:
+                            try:
+                                vars_map[f"ref{i}"] = float(values_by_name[r] or 0)
+                            except (TypeError, ValueError):
+                                vars_map[f"ref{i}"] = 0.0
                     try:
                         pass_, tol_val, _ = evaluate_pass_fail(
                             tol_type,
@@ -3700,6 +3757,9 @@ class TemplatesDialog(QtWidgets.QDialog):
                 f.get("calc_type"),
                 f.get("calc_ref1_name"),
                 f.get("calc_ref2_name"),
+                f.get("calc_ref3_name"),
+                f.get("calc_ref4_name"),
+                f.get("calc_ref5_name"),
                 f.get("tolerance"),
                 bool(f.get("autofill_from_first_group", 0)),
                 f.get("default_value"),
@@ -3765,6 +3825,9 @@ class TemplatesDialog(QtWidgets.QDialog):
                 f.get("calc_type"),
                 f.get("calc_ref1_name"),
                 f.get("calc_ref2_name"),
+                f.get("calc_ref3_name"),
+                f.get("calc_ref4_name"),
+                f.get("calc_ref5_name"),
                 f.get("tolerance"),
                 bool(f.get("autofill_from_first_group", 0)),
                 f.get("default_value"),
@@ -4585,6 +4648,34 @@ class CalibrationFormDialog(QtWidgets.QDialog):
                     result_val = ""
                 field_values[fid] = result_val
 
+            elif calc_type in ("MIN_OF", "MAX_OF", "RANGE_OF"):
+                ref_names = [
+                    f.get("calc_ref1_name"),
+                    f.get("calc_ref2_name"),
+                    f.get("calc_ref3_name"),
+                    f.get("calc_ref4_name"),
+                    f.get("calc_ref5_name"),
+                ]
+                nums = []
+                for r in ref_names:
+                    if not r:
+                        continue
+                    v = values_by_name.get(r)
+                    if v not in (None, ""):
+                        try:
+                            nums.append(float(v))
+                        except (TypeError, ValueError):
+                            pass
+                result_val = ""
+                if len(nums) >= 2:
+                    if calc_type == "MIN_OF":
+                        result_val = f"{min(nums):.3f}"
+                    elif calc_type == "MAX_OF":
+                        result_val = f"{max(nums):.3f}"
+                    else:  # RANGE_OF
+                        result_val = f"{(max(nums) - min(nums)):.3f}"
+                field_values[fid] = result_val
+
         # If you ever add more calc types, handle them here.
 
         # Third pass: auto-FAIL if any ABS_DIFF or PCT_DIFF exceeds tolerance (central tolerance service)
@@ -4594,7 +4685,7 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         except ImportError:
             evaluate_pass_fail = None
         for f in self.fields:
-            if f.get("calc_type") not in ("ABS_DIFF", "PCT_DIFF"):
+            if f.get("calc_type") not in ("ABS_DIFF", "PCT_DIFF", "MIN_OF", "MAX_OF", "RANGE_OF"):
                 continue
 
             tol_raw = f.get("tolerance")
@@ -4620,17 +4711,16 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             if evaluate_pass_fail:
                 ref1 = f.get("calc_ref1_name")
                 ref2 = f.get("calc_ref2_name")
+                ref3 = f.get("calc_ref3_name")
+                ref4 = f.get("calc_ref4_name")
+                ref5 = f.get("calc_ref5_name")
                 vars_map = {"nominal": 0.0, "reading": diff}
-                if ref1 and ref1 in values_by_name:
-                    try:
-                        vars_map["ref1"] = float(values_by_name[ref1] or 0)
-                    except (TypeError, ValueError):
-                        vars_map["ref1"] = 0.0
-                if ref2 and ref2 in values_by_name:
-                    try:
-                        vars_map["ref2"] = float(values_by_name[ref2] or 0)
-                    except (TypeError, ValueError):
-                        vars_map["ref2"] = 0.0
+                for i, r in enumerate((ref1, ref2, ref3, ref4, ref5), 1):
+                    if r and r in values_by_name:
+                        try:
+                            vars_map[f"ref{i}"] = float(values_by_name[r] or 0)
+                        except (TypeError, ValueError):
+                            vars_map[f"ref{i}"] = 0.0
                 pass_, _, _ = evaluate_pass_fail(
                     f.get("tolerance_type"),
                     tol_fixed,
