@@ -270,11 +270,10 @@ def _initialize_db_core(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    # Indexes for frequently queried columns
+    # Indexes for frequently queried columns (instrument_type_id index created after column may be added below)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_instruments_tag_number ON instruments(tag_number)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_instruments_status ON instruments(status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_instruments_next_due_date ON instruments(next_due_date)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_instruments_instrument_type_id ON instruments(instrument_type_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_instruments_destination_id ON instruments(destination_id)")
 
     cur.execute(
@@ -351,13 +350,14 @@ def _initialize_db_core(conn: sqlite3.Connection) -> None:
     # Index for instrument types (name is already unique, but explicit index helps)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_instrument_types_name ON instrument_types(name)")
 
-    # Add instrument_type_id to instruments if missing
+    # Add instrument_type_id to instruments if missing (existing DBs may not have it)
     cur.execute("PRAGMA table_info(instruments)")
     cols = [r[1] for r in cur.fetchall()]
     if "instrument_type_id" not in cols:
         cur.execute(
             "ALTER TABLE instruments ADD COLUMN instrument_type_id INTEGER REFERENCES instrument_types(id) ON DELETE SET NULL"
         )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_instruments_instrument_type_id ON instruments(instrument_type_id)")
 
     # Calibration templates (per instrument_type)
     cur.execute(
