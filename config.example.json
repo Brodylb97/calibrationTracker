@@ -1,0 +1,4 @@
+{
+  "_comment": "Copy to config.json and adjust. Used to configure the database path.",
+  "db_path": "Z:\\Shared\\Laboratory\\Particulate Matter and Other Results\\Brody's Project Junk\\Cal Tracker Current\\calibration.db"
+}

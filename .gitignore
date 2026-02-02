@@ -29,6 +29,7 @@ wheels/
 *.db-journal
 *.db-wal
 *.db-shm
+.migrating
 
 # Logs
 logs/
@@ -45,6 +46,9 @@ logs/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Local config (copy from config.example.json)
+config.json
 
 # Distribution
 installer/

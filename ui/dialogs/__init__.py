@@ -1,0 +1,47 @@
+# ui/dialogs - Dialog classes for Calibration Tracker
+
+from ui.theme import ThemeEditorDialog
+from ui.dialogs.all_dialogs import (
+    InstrumentDialog,
+    SettingsDialog,
+    AttachmentsDialog,
+    DestinationEditDialog,
+    DestinationsDialog,
+    PersonnelEditDialog,
+    PersonnelDialog,
+    TemplateEditDialog,
+    FieldEditDialog,
+    ExplainToleranceDialog,
+    TemplateFieldsDialog,
+    CalibrationHistoryDialog,
+    TemplatesDialog,
+    CalibrationFormDialog,
+    BatchUpdateDialog,
+    BatchAssignInstrumentTypeDialog,
+    CalDateDialog,
+    InstrumentInfoDialog,
+    AuditLogDialog,
+)
+
+__all__ = [
+    "ThemeEditorDialog",
+    "InstrumentDialog",
+    "SettingsDialog",
+    "AttachmentsDialog",
+    "DestinationEditDialog",
+    "DestinationsDialog",
+    "PersonnelEditDialog",
+    "PersonnelDialog",
+    "TemplateEditDialog",
+    "FieldEditDialog",
+    "ExplainToleranceDialog",
+    "TemplateFieldsDialog",
+    "CalibrationHistoryDialog",
+    "TemplatesDialog",
+    "CalibrationFormDialog",
+    "BatchUpdateDialog",
+    "BatchAssignInstrumentTypeDialog",
+    "CalDateDialog",
+    "InstrumentInfoDialog",
+    "AuditLogDialog",
+]

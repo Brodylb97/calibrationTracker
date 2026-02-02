@@ -1,0 +1,45 @@
+{
+  "editor.formatOnSave": true,
+  "editor.formatOnPaste": false,
+  "editor.codeActionsOnSave": {
+    "source.fixAll": true,
+    "source.organizeImports": true
+  },
+  "editor.minimap.enabled": false,
+  "editor.renderWhitespace": "boundary",
+  "editor.rulers": [
+    88
+  ],
+  "editor.bracketPairColorization.enabled": true,
+  "editor.guides.bracketPairs": true,
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "files.autoSave": "onFocusChange",
+  "python.defaultInterpreterPath": "",
+  "python.analysis.typeCheckingMode": "strict",
+  "python.analysis.autoImportCompletions": true,
+  "python.analysis.useLibraryCodeForTypes": true,
+  "python.formatting.provider": "black",
+  "black-formatter.args": [
+    "--line-length",
+    "88"
+  ],
+  "ruff.enable": true,
+  "ruff.fixOnSave": true,
+  "ruff.organizeImports": true,
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.autoTestDiscoverOnSaveEnabled": true,
+  "errorLens.enabled": true,
+  "errorLens.fontWeight": "bold",
+  "git.autofetch": true,
+  "git.confirmSync": false,
+  "git.enableSmartCommit": true,
+  "terminal.integrated.defaultProfile.windows": "PowerShell",
+  "terminal.integrated.scrollback": 5000,
+  "explorer.confirmDelete": true,
+  "explorer.confirmDragAndDrop": true,
+  "workbench.editor.enablePreview": false,
+  "workbench.startupEditor": "none",
+  "workbench.tree.indent": 12
+}

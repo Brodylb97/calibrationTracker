@@ -1,0 +1,171 @@
+# Cursor Anti-Patterns – Calibration Tracker Project
+# Purpose: Soft guardrails against mistakes that age poorly
+# Tone: Gentle but firm. These are warnings, not scoldings.
+
+############################################
+## ANTI-PATTERN 1: MIXING UI AND LOGIC
+############################################
+Avoid:
+- Writing business logic directly in button callbacks
+- Performing file I/O inside UI event handlers
+
+Prefer:
+- Thin UI layers
+- Service or domain functions that the UI calls
+
+Reason:
+UI code changes often. Core logic should not.
+
+--------------------------------------------
+
+############################################
+## ANTI-PATTERN 2: MODIFYING RECORDS IN PLACE
+############################################
+Avoid:
+- Editing persisted calibration records directly
+- Overwriting historical values
+
+Prefer:
+- Revisioning
+- Superseded records
+- Clear audit trails
+
+Reason:
+History is part of the data, not clutter.
+
+--------------------------------------------
+
+############################################
+## ANTI-PATTERN 3: SILENT FAILURE
+############################################
+Avoid:
+- Swallowing exceptions
+- Logging errors without notifying the user
+- Returning None on failure without explanation
+
+Prefer:
+- Explicit exceptions
+- Human-readable error messages
+- Clear failure states
+
+Reason:
+Silent failures destroy trust.
+
+--------------------------------------------
+
+############################################
+## ANTI-PATTERN 4: CLEVER ABSTRACTIONS TOO EARLY
+############################################
+Avoid:
+- Generic “manager” classes
+- Deep inheritance hierarchies
+- Abstractions without multiple real use cases
+
+Prefer:
+- Simple functions
+- Explicit logic
+- Duplication that can be refactored later
+
+Reason:
+Premature abstraction becomes permanent complexity.
+
+--------------------------------------------
+
+############################################
+## ANTI-PATTERN 5: RAW DICTS EVERYWHERE
+############################################
+Avoid:
+- Passing dicts between layers
+- Accessing data with magic string keys
+
+Prefer:
+- Dataclasses or Pydantic models
+- Typed attributes
+
+Reason:
+Types document intent and catch mistakes.
+
+--------------------------------------------
+
+############################################
+## ANTI-PATTERN 6: FILESYSTEM ASSUMPTIONS
+############################################
+Avoid:
+- Assuming files exist
+- Assuming paths are writable
+- Assuming no spaces in paths
+
+Prefer:
+- Explicit checks
+- pathlib
+- Graceful user-facing errors
+
+Reason:
+The filesystem is adversarial.
+
+--------------------------------------------
+
+############################################
+## ANTI-PATTERN 7: PRINT-BASED DEBUGGING
+############################################
+Avoid:
+- print() statements in application code
+
+Prefer:
+- logging with appropriate levels
+- Structured, timestamped logs
+
+Reason:
+Print statements do not scale or persist.
+
+--------------------------------------------
+
+############################################
+## ANTI-PATTERN 8: LONG OPERATIONS ON UI THREAD
+############################################
+Avoid:
+- Blocking calls in the UI thread
+- Long loops triggered by user actions
+
+Prefer:
+- Background threads or async tasks
+- Disabled UI states with feedback
+
+Reason:
+Frozen UIs feel broken, even when they are not.
+
+--------------------------------------------
+
+############################################
+## ANTI-PATTERN 9: IGNORING EDGE CASES
+############################################
+Avoid:
+- “This will never happen” logic
+- Skipping validation for internal tools
+
+Prefer:
+- Defensive checks
+- Explicit error handling
+
+Reason:
+Internal tools get used creatively.
+
+--------------------------------------------
+
+############################################
+## ANTI-PATTERN 10: LARGE, MULTI-PURPOSE FUNCTIONS
+############################################
+Avoid:
+- Functions that validate, persist, and render
+- Functions longer than one screen
+
+Prefer:
+- Small, single-purpose functions
+- Clear data flow between steps
+
+Reason:
+Small functions are easier to reason about and test.
+
+--------------------------------------------
+
+End of anti-patterns.

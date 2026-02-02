@@ -146,7 +146,7 @@ def export_calibration_to_pdf(repo, rec_id: int, output_path: str | Path) -> Non
     rec = repo.get_calibration_record_with_template(rec_id)
     if not rec:
         raise ValueError(f"Calibration record {rec_id} not found.")
-    instrument = repo.get_instrument(rec["instrument_id"]) or {}
+    instrument = repo.get_instrument(rec["instrument_id"])
     values = repo.get_calibration_values(rec_id)
 
     # Portrait, black and white
@@ -215,10 +215,10 @@ def export_calibration_to_pdf(repo, rec_id: int, output_path: str | Path) -> Non
         story.append(logo_table)
         story.append(Spacer(1, 0.08 * inch))
 
-    tag = instrument.get("tag_number") or "—"
+    tag = (instrument.tag_number if instrument else None) or "—"
     cal_date = rec.get("cal_date") or "—"
     template_name = rec.get("template_name") or "Calibration"
-    location = instrument.get("location") or "—"
+    location = (instrument.location if instrument else None) or "—"
     performed_by = rec.get("performed_by") or "—"
     result = rec.get("result") or "—"
 
@@ -316,20 +316,33 @@ def export_calibration_to_pdf(repo, rec_id: int, output_path: str | Path) -> Non
     doc.build(story)
 
 
-def export_all_calibrations_to_directory(repo, base_dir: str | Path) -> dict:
+def export_all_calibrations_to_directory(
+    repo, base_dir: str | Path, *,
+    progress_callback=None,
+    cancelled_check=None,
+) -> dict:
     """
     Export all calibration records to PDF files in the given directory.
     Organizes files by instrument type: base_dir / instrument_type_name / tag_caldate.pdf
-    Returns dict with: success_count, attachment_count, error_count, errors (list of strings).
+    Returns dict with: success_count, attachment_count, error_count, errors (list of strings),
+    cancelled (bool).
+
+    Optional: progress_callback(current, total) called after each record.
+    Optional: cancelled_check() - if returns True, export stops and returns partial result.
     """
     base_dir = Path(base_dir)
     base_dir.mkdir(parents=True, exist_ok=True)
     records = repo.list_all_calibration_records()
+    total = len(records)
     success_count = 0
     error_count = 0
     errors = []
-    
-    for rec in records:
+    cancelled = False
+
+    for i, rec in enumerate(records):
+        if cancelled_check and cancelled_check():
+            cancelled = True
+            break
         rec_id = rec["id"]
         instrument_type_name = rec.get("instrument_type_name") or "Unknown"
         tag = rec.get("tag_number") or "unknown"
@@ -347,10 +360,13 @@ def export_all_calibrations_to_directory(repo, base_dir: str | Path) -> dict:
         except Exception as e:
             error_count += 1
             errors.append(f"Record {rec_id} ({tag} {cal_date}): {e}")
-    
+        if progress_callback:
+            progress_callback(i + 1, total)
+
     return {
         "success_count": success_count,
         "attachment_count": 0,
         "error_count": error_count,
         "errors": errors,
+        "cancelled": cancelled,
     }

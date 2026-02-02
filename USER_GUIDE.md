@@ -517,6 +517,16 @@ Configure calibration reminders:
 - **Reminder window (days)**: How many days before due date to send reminders
 - **LAN broadcast settings**: Configure network reminder broadcasts
 
+### Database Path Configuration
+
+To use a different database location (e.g., for development or a different site):
+
+1. **Config file**: Copy `config.example.json` to `config.json` in the same folder as the app, and set `db_path` to your database path. Use absolute paths (e.g., `Z:\Shared\Lab\calibration.db`) or paths relative to the config file.
+2. **Alternative**: Add `db_path` to `update_config.json` if you already use it.
+3. **Environment variable**: Set `CALIBRATION_TRACKER_DB_PATH` to override any config file.
+
+If none are set, the app uses the built-in default path. The last-used database path is saved and reused after updates.
+
 ### Themes and Text Size
 
 - **Help → Theme**: Choose a color theme. Options include Fusion (default dark), Taylor's Theme, Tess's Theme, Retina Seering (bright, minimal), and Vice (cyan/pink/mint on dark). Your choice is saved and used the next time you start the app.
@@ -624,6 +634,13 @@ To send reminders for instruments due for calibration:
 ### Common Issues
 
 #### Database Errors
+
+**Problem**: "Unable to open database file" or "Cannot open database"
+
+**Solution**:
+- Ensure the database path is correct. You can configure it via `config.json` (copy from `config.example.json`) or the `CALIBRATION_TRACKER_DB_PATH` environment variable.
+- If using a network path (e.g., `Z:\`), ensure the drive is connected and the path is accessible.
+- Check that the folder exists and you have read and write permissions.
 
 **Problem**: "Database locked" or similar errors
 

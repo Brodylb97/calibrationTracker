@@ -1,0 +1,104 @@
+# Cursor Patterns – Calibration Tracker Project
+# Purpose: Canonical ways of doing common tasks in this codebase
+# These patterns guide the AI toward consistency and long-term sanity
+
+############################################
+## PATTERN 1: ADDING A NEW CALIBRATION TYPE
+############################################
+Steps:
+1. Define a new domain model (dataclass or Pydantic)
+2. Validate all required fields explicitly
+3. Add persistence support (schema + migration)
+4. Update services layer to handle lifecycle
+5. Expose UI changes last
+
+Rules:
+- Do not reuse existing models with flags
+- Do not store units or tolerances as strings
+- Do not bypass revisioning
+
+############################################
+## PATTERN 2: EDITING EXISTING RECORDS
+############################################
+Correct Approach:
+- Mark existing record as superseded
+- Create a new revision with a new ID
+- Preserve old values in audit log
+
+Never:
+- Modify persisted records in-place
+- Delete historical calibration data
+
+############################################
+## PATTERN 3: FILE IMPORT
+############################################
+Steps:
+1. Validate file existence and permissions
+2. Parse into temporary structures
+3. Validate schema and types
+4. Only then persist
+
+Rules:
+- Imports must be atomic
+- Partial imports are failures
+- Errors must be user-visible
+
+############################################
+## PATTERN 4: FILE EXPORT
+############################################
+Rules:
+- Exports are read-only operations
+- Never mutate data during export
+- Confirm overwrite if file exists
+
+############################################
+## PATTERN 5: LONG-RUNNING OPERATIONS
+############################################
+Rules:
+- Never block the UI thread
+- Disable triggering controls
+- Show progress or busy state
+- Always re-enable UI on failure
+
+############################################
+## PATTERN 6: ERROR HANDLING
+############################################
+Rules:
+- Raise explicit exceptions
+- Catch at the UI boundary only
+- Show clear, human-readable messages
+- Log full stack traces
+
+############################################
+## PATTERN 7: ADDING PERSISTENCE LOGIC
+############################################
+Rules:
+- All disk I/O goes through persistence layer
+- Schema changes require migrations
+- Reads must validate data
+
+############################################
+## PATTERN 8: REFACTORING
+############################################
+Rules:
+- Preserve behavior
+- Refactor incrementally
+- Tests first when possible
+
+############################################
+## PATTERN 9: CONFIGURATION
+############################################
+Rules:
+- Config stored separately from data
+- Config changes must not mutate data
+- Use explicit defaults
+
+############################################
+## PATTERN 10: LOGGING
+############################################
+Rules:
+- Log before and after values
+- No print statements
+- Logs must be timestamped
+
+End of patterns.

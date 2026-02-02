@@ -1,0 +1,68 @@
+# ui/theme - Theme definitions, storage, preview, and editor
+# Backward-compatible re-exports for "from ui.theme import ..."
+
+from ui.theme.core import (
+    THEME_SETTINGS_KEY,
+    DEFAULT_THEME,
+    REQUIRED_THEME_KEYS,
+    THEMES,
+    BUILT_IN_THEME_NAMES,
+    FONT_SIZE_SETTINGS_KEY,
+    DEFAULT_FONT_SIZE,
+    FONT_SIZE_OPTIONS,
+    FONT_SIZE_POINTS,
+    normalize_hex,
+    validate_theme_colors,
+    validate_hex_input,
+    open_color_picker,
+    get_all_themes,
+    get_theme_colors,
+    get_saved_theme,
+    set_saved_theme,
+    get_saved_font_size,
+    set_saved_font_size,
+    _app_icon_path,
+    apply_global_style,
+    apply_theme_from_colors,
+)
+from ui.theme.storage import (
+    load_custom_themes,
+    save_custom_themes,
+    add_custom_theme,
+    update_custom_theme,
+    delete_custom_theme,
+)
+from ui.theme.preview import ThemePreviewWidget
+from ui.theme.editor import ThemeEditorDialog
+
+__all__ = [
+    "THEME_SETTINGS_KEY",
+    "DEFAULT_THEME",
+    "REQUIRED_THEME_KEYS",
+    "THEMES",
+    "BUILT_IN_THEME_NAMES",
+    "FONT_SIZE_SETTINGS_KEY",
+    "DEFAULT_FONT_SIZE",
+    "FONT_SIZE_OPTIONS",
+    "FONT_SIZE_POINTS",
+    "normalize_hex",
+    "validate_theme_colors",
+    "validate_hex_input",
+    "open_color_picker",
+    "get_all_themes",
+    "get_theme_colors",
+    "get_saved_theme",
+    "set_saved_theme",
+    "get_saved_font_size",
+    "set_saved_font_size",
+    "_app_icon_path",
+    "apply_global_style",
+    "apply_theme_from_colors",
+    "load_custom_themes",
+    "save_custom_themes",
+    "add_custom_theme",
+    "update_custom_theme",
+    "delete_custom_theme",
+    "ThemePreviewWidget",
+    "ThemeEditorDialog",
+]

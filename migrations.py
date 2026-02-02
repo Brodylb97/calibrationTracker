@@ -210,8 +210,106 @@ def migrate_5_template_tolerance_and_versioning(conn: sqlite3.Connection) -> Non
     logger.info("Migration 5 applied: template tolerance types, versioning, template_version on records")
 
 
-def run_migrations(conn: sqlite3.Connection) -> None:
-    """Run all pending migrations in order."""
+def migrate_6_add_reference_type(conn: sqlite3.Connection) -> None:
+    """Add 'reference' to calibration_template_fields.data_type CHECK."""
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(calibration_template_fields)")
+    old_cols = [r[1] for r in cur.fetchall()]
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        cur.execute(
+            """
+            CREATE TABLE calibration_template_fields_new (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id     INTEGER NOT NULL REFERENCES calibration_templates(id) ON DELETE CASCADE,
+                name            TEXT NOT NULL,
+                label           TEXT NOT NULL,
+                data_type       TEXT NOT NULL CHECK (data_type IN ('text', 'number', 'bool', 'date', 'signature', 'reference')),
+                unit            TEXT,
+                required        INTEGER NOT NULL DEFAULT 0,
+                sort_order      INTEGER NOT NULL DEFAULT 0,
+                group_name      TEXT,
+                calc_type       TEXT,
+                calc_ref1_name  TEXT,
+                calc_ref2_name  TEXT,
+                calc_ref3_name  TEXT,
+                calc_ref4_name  TEXT,
+                calc_ref5_name  TEXT,
+                tolerance       REAL,
+                autofill_from_first_group INTEGER NOT NULL DEFAULT 0,
+                default_value   TEXT,
+                tolerance_type  TEXT,
+                tolerance_equation TEXT,
+                nominal_value   TEXT,
+                tolerance_lookup_json TEXT
+            )
+            """
+        )
+        sel_cols = [c for c in old_cols if c in (
+            "id", "template_id", "name", "label", "data_type", "unit", "required", "sort_order",
+            "group_name", "calc_type", "calc_ref1_name", "calc_ref2_name", "calc_ref3_name",
+            "calc_ref4_name", "calc_ref5_name", "tolerance", "autofill_from_first_group",
+            "default_value", "tolerance_type", "tolerance_equation", "nominal_value", "tolerance_lookup_json"
+        )]
+        ins_cols = sel_cols
+        sel_list = ", ".join(sel_cols)
+        ins_list = ", ".join(ins_cols)
+        cur.execute(
+            f"INSERT INTO calibration_template_fields_new ({ins_list}) SELECT {sel_list} FROM calibration_template_fields"
+        )
+        cur.execute("DROP TABLE calibration_template_fields")
+        cur.execute("ALTER TABLE calibration_template_fields_new RENAME TO calibration_template_fields")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_template_id ON calibration_template_fields(template_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_sort_order ON calibration_template_fields(template_id, sort_order)")
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    logger.info("Migration 6 applied: added 'reference' to calibration_template_fields.data_type")
+
+
+def _migration_lock_path(db_path) -> "Path | None":
+    """Path to advisory lock file next to the database."""
+    if db_path is None:
+        return None
+    from pathlib import Path
+    return Path(db_path).parent / ".migrating"
+
+
+def run_migrations(conn: sqlite3.Connection, db_path=None) -> None:
+    """Run all pending migrations in order. Uses advisory lock file to prevent concurrent migration."""
+    import time
+    lock_path = _migration_lock_path(db_path)
+    if lock_path:
+        # Wait briefly if another process is migrating
+        for _ in range(30):
+            if not lock_path.exists():
+                break
+            time.sleep(0.2)
+        if lock_path.exists():
+            raise RuntimeError(
+                "Another process appears to be running migrations. "
+                "Wait for it to finish or remove the .migrating file if it crashed."
+            )
+        try:
+            lock_path.write_text(str(time.time()), encoding="utf-8")
+        except OSError:
+            pass
+
+    try:
+        _run_migrations_impl(conn)
+    finally:
+        if lock_path and lock_path.exists():
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
+
+
+def _run_migrations_impl(conn: sqlite3.Connection) -> None:
+    """Internal: run migrations without lock."""
     version = get_schema_version(conn)
     if version < 1:
         migrate_1_instruments_status_and_audit_reason(conn)
@@ -232,3 +330,7 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     if version < 5:
         migrate_5_template_tolerance_and_versioning(conn)
         set_schema_version(conn, 5)
+        version = 5
+    if version < 6:
+        migrate_6_add_reference_type(conn)
+        set_schema_version(conn, 6)

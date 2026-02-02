@@ -37,21 +37,21 @@ def _crash_flag_exists() -> bool:
 
 
 def _crash_flag_write() -> None:
+    from file_utils import atomic_write_text
     p = _crash_flag_path()
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("1", encoding="utf-8")
-    except Exception:
-        pass
+        atomic_write_text(p, "1")
+    except Exception as e:
+        logger.warning("Failed to write crash flag to %s: %s", p, e)
 
 
 def _crash_flag_remove() -> None:
+    p = _crash_flag_path()
     try:
-        p = _crash_flag_path()
         if p.is_file():
             p.unlink()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Failed to remove crash flag %s: %s", p, e)
 
 
 def _show_crash_recovery_dialog(db_path: Path) -> None:
@@ -139,6 +139,25 @@ def main():
             try:
                 conn = get_connection(db_path)
                 conn = initialize_db(conn, db_path)
+                # Integrity check: fail fast if database is corrupt
+                integrity_err = run_integrity_check(conn)
+                if integrity_err:
+                    logger.error("Database integrity check failed: %s", integrity_err)
+                    try:
+                        from PyQt5.QtWidgets import QApplication, QMessageBox
+                        app = QApplication.instance()
+                        if app is None:
+                            app = QApplication(sys.argv)
+                        QMessageBox.critical(
+                            None,
+                            "Database integrity check failed",
+                            f"The database integrity check failed:\n\n{integrity_err}\n\n"
+                            f"Restore from backup or contact support.\n\n"
+                            f"Database: {db_path}\nBackups: {db_path.parent / 'backups'}",
+                        )
+                    except Exception:
+                        print(f"Database integrity check failed: {integrity_err}", file=sys.stderr)
+                    sys.exit(1)
                 break
             except sqlite3.OperationalError as e:
                 err_lower = str(e).lower()
@@ -200,6 +219,24 @@ def main():
 
         logger.info("Program exit normally")
 
+    except RuntimeError as e:
+        err_msg = str(e).lower()
+        if "migration" in err_msg or "schema" in err_msg:
+            log_current_exception("Migration/schema error in main()")
+            try:
+                from PyQt5.QtWidgets import QApplication, QMessageBox
+                app = QApplication.instance()
+                if app is None:
+                    app = QApplication(sys.argv)
+                QMessageBox.critical(
+                    None,
+                    "Database schema error",
+                    str(e) + "\n\nExiting.",
+                )
+            except Exception:
+                print(str(e), file=sys.stderr)
+            sys.exit(1)
+        raise
     except Exception:
         # This catches top-level failures during startup / shutdown
         log_current_exception("Fatal error in main()")

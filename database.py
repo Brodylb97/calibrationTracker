@@ -1,10 +1,16 @@
 # database.py
 
+import json
 import os
+import sys
+import uuid
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from domain.models import Instrument
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
-import sys
 import shutil
 
 # -----------------------------------------------------------------------------
@@ -40,17 +46,104 @@ def get_persisted_last_db_path() -> Path | None:
 
 def persist_last_db_path(path: Path) -> None:
     """Write the given DB path so the next launch can use it as default (e.g. after an update)."""
+    import logging
+    from file_utils import atomic_write_text
     p = _last_db_file()
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(str(path.resolve()), encoding="utf-8")
-    except Exception:
-        pass
+        atomic_write_text(p, str(path.resolve()))
+    except Exception as e:
+        logging.getLogger(__name__).warning(
+            "Failed to persist last DB path to %s: %s", p, e
+        )
 
-# Default DB path: shared network location
-SERVER_DB_PATH = Path(
+# Default DB path when no config is set (shared network location)
+_DEFAULT_SERVER_DB_PATH = Path(
     r"Z:\Shared\Laboratory\Particulate Matter and Other Results\Brody's Project Junk\Cal Tracker Current\calibration.db"
 )
+
+# Environment variable to override config file location
+CONFIG_PATH_ENV = "CALIBRATION_TRACKER_CONFIG"
+# Environment variable to override database path directly (overrides config file)
+DB_PATH_ENV = "CALIBRATION_TRACKER_DB_PATH"
+
+
+def _app_base_dir() -> Path:
+    """Directory containing the app (install dir when frozen, script dir when run from source)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def _is_local_directory_path(path: Path) -> bool:
+    """
+    True if path is under the application directory or current working directory.
+    Such paths are treated as local copies; only the server database path is allowed.
+    """
+    try:
+        path = path.resolve()
+    except OSError:
+        return True  # Unresolvable: treat as invalid/local
+    base = _app_base_dir().resolve()
+    cwd = Path.cwd().resolve()
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        pass
+    try:
+        path.relative_to(cwd)
+        return True
+    except ValueError:
+        pass
+    return False
+
+
+def _load_configured_db_path() -> Path:
+    """
+    Load database path from configuration.
+    Order: DB_PATH_ENV > config.json > update_config.json > _DEFAULT_SERVER_DB_PATH.
+    Paths under the app directory or current directory are rejected; only the server path is used.
+    """
+    import logging
+    _log = logging.getLogger(__name__)
+
+    def _reject_local_and_return(path: Path) -> Path:
+        if _is_local_directory_path(path):
+            _log.warning(
+                "Database path is in application or current directory (local copy). "
+                "Using server path only: %s",
+                _DEFAULT_SERVER_DB_PATH,
+            )
+            return _DEFAULT_SERVER_DB_PATH
+        return path
+
+    base = _app_base_dir()
+    # 1. Environment variable (highest priority)
+    env_path = os.environ.get(DB_PATH_ENV)
+    if env_path and env_path.strip():
+        return _reject_local_and_return(Path(env_path.strip()).resolve())
+
+    # 2. config.json
+    for config_name in ("config.json", "update_config.json"):
+        config_path = base / config_name
+        if config_path.is_file():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                raw = data.get("db_path")
+                if raw and isinstance(raw, str) and raw.strip():
+                    p = Path(raw.strip())
+                    if not p.is_absolute():
+                        p = (config_path.parent / p).resolve()
+                    return _reject_local_and_return(p)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+    return _DEFAULT_SERVER_DB_PATH
+
+
+# Resolved default path (from config or constant)
+SERVER_DB_PATH = _load_configured_db_path()
 
 
 def _path_equal(a: Path | None, b: Path | None) -> bool:
@@ -66,19 +159,18 @@ def is_server_db_path(path: Path | None) -> bool:
 
 
 def get_base_dir() -> Path:
-    """
-    Base dir for the app (install dir when frozen, script dir when run from source).
-    """
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
-    else:
-        return Path(__file__).resolve().parent
+    """Base dir for the app (install dir when frozen, script dir when run from source)."""
+    return _app_base_dir()
+
 
 BASE_DIR = get_base_dir()
 
 # App connects only to the server database (DB_PATH or explicit --db to same server).
 DB_PATH = SERVER_DB_PATH
 ATTACHMENTS_DIR = DB_PATH.parent / "attachments"
+
+# Future: "server" | "local". When server-backed work begins, this gates connection and sync behavior.
+DATA_MODE = "local"
 
 _effective_db_path: Path | None = None
 
@@ -96,12 +188,14 @@ def get_attachments_dir() -> Path:
 # Connection helpers
 # -----------------------------------------------------------------------------
 
-def get_connection(db_path: Path | None = None, timeout: float = 30.0):
+def get_connection(db_path: Path | None = None, timeout: float = 30.0, retries: int = 3):
     """
     Connect to the server database only. No local copies; only the server path is allowed.
     Raises ValueError if db_path is not the server path. Raises on open failure or read-only.
     timeout: seconds to wait for locks (use a shorter value for UI-triggered reconnect).
+    retries: number of retries on SQLITE_BUSY / database is locked (with exponential backoff).
     """
+    import time
     global _effective_db_path
     if db_path is None:
         db_path = DB_PATH
@@ -116,18 +210,32 @@ def get_connection(db_path: Path | None = None, timeout: float = 30.0):
         parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
-    try:
-        conn = sqlite3.connect(str(db_path), timeout=timeout)
-    except sqlite3.OperationalError as e:
-        if "unable to open database file" in str(e).lower():
-            raise sqlite3.OperationalError(
-                f"Could not open database at:\n{db_path}\n\n"
-                "Check that:\n"
-                "• The drive (e.g. Z:) is connected and the path is accessible\n"
-                "• The folder exists (or that the app can create it)\n"
-                "• You have read and write permission for that location"
-            ) from e
-        raise
+
+    last_err = None
+    for attempt in range(max(1, retries)):
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=timeout)
+            break
+        except sqlite3.OperationalError as e:
+            last_err = e
+            err_lower = str(e).lower()
+            if "unable to open database file" in err_lower:
+                raise sqlite3.OperationalError(
+                    f"Could not open database at:\n{db_path}\n\n"
+                    "Check that:\n"
+                    "• The drive (e.g. Z:) is connected and the path is accessible\n"
+                    "• The folder exists (or that the app can create it)\n"
+                    "• You have read and write permission for that location"
+                ) from e
+            if ("database is locked" in err_lower or "sqlite_busy" in err_lower) and attempt < retries - 1:
+                time.sleep(0.1 * (2 ** attempt))
+                continue
+            raise
+    else:
+        if last_err:
+            raise last_err
+        raise RuntimeError("Failed to connect to database")
+
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -218,7 +326,7 @@ def initialize_db(conn: sqlite3.Connection, db_path: Path | None = None) -> sqli
     Runs integrity check after init; on failure logs a warning (does not block startup).
     """
     try:
-        _initialize_db_core(conn)
+        _initialize_db_core(conn, db_path)
         err = run_integrity_check(conn)
         if err:
             import logging
@@ -236,7 +344,7 @@ def initialize_db(conn: sqlite3.Connection, db_path: Path | None = None) -> sqli
         raise
 
 
-def _initialize_db_core(conn: sqlite3.Connection) -> None:
+def _initialize_db_core(conn: sqlite3.Connection, db_path: Path | None = None) -> None:
     """Internal: run schema creation and seeding. Raises on readonly."""
     cur = conn.cursor()
 
@@ -507,9 +615,17 @@ def _initialize_db_core(conn: sqlite3.Connection) -> None:
     conn.commit()
     try:
         from migrations import run_migrations
-        run_migrations(conn)
+        run_migrations(conn, db_path)
     except ImportError:
         pass
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("Schema migration failed: %s", e, exc_info=True)
+        raise RuntimeError(
+            f"Database schema migration failed. Your database may be incompatible with this version.\n\n"
+            f"Error: {e}\n\n"
+            "Check the log file or try restoring from a backup."
+        ) from e
 
     conn.commit()
     get_attachments_dir().mkdir(parents=True, exist_ok=True)
@@ -528,6 +644,14 @@ def _initialize_db_core(conn: sqlite3.Connection) -> None:
         logging.getLogger(__name__).warning(f"Daily backup check failed: {e}")
     
     conn.commit()
+
+
+# -----------------------------------------------------------------------------
+# Exceptions
+# -----------------------------------------------------------------------------
+
+class StaleDataError(Exception):
+    """Raised when optimistic lock fails (record was modified by another process/user)."""
 
 
 # -----------------------------------------------------------------------------
@@ -1062,7 +1186,7 @@ class CalibrationRepository:
                          calc_type, calc_ref1_name, calc_ref2_name""" + ref3_sql + """,
                          tolerance, autofill_from_first_group, default_value,
                          tolerance_type, tolerance_equation, nominal_value, tolerance_lookup_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?""" + ref3_ph + """, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?""" + ref3_ph + """, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         template_id,
@@ -1207,6 +1331,11 @@ class CalibrationRepository:
         self.conn.commit()
 
     def delete_template_field(self, field_id: int):
+        # Remove calibration values that reference this field (FK is ON DELETE RESTRICT)
+        self.conn.execute(
+            "DELETE FROM calibration_values WHERE field_id = ?",
+            (field_id,),
+        )
         self.conn.execute(
             "DELETE FROM calibration_template_fields WHERE id = ?",
             (field_id,),
@@ -1379,19 +1508,34 @@ class CalibrationRepository:
 
     def update_calibration_record(self, record_id: int, cal_date: str,
                                   performed_by: str, result: str, notes: str,
-                                  field_values: dict[int, str]):
+                                  field_values: dict[int, str],
+                                  expected_updated_at: str | None = None):
         cur = self.conn.cursor()
         try:
             cur.execute("BEGIN")
-            cur.execute(
-                """
-                UPDATE calibration_records
-                SET cal_date = ?, performed_by = ?, result = ?, notes = ?,
-                    updated_at = datetime('now')
-                WHERE id = ?
-                """,
-                (cal_date, performed_by, result, notes, record_id),
-            )
+            if expected_updated_at is not None:
+                cur.execute(
+                    """
+                    UPDATE calibration_records
+                    SET cal_date = ?, performed_by = ?, result = ?, notes = ?,
+                        updated_at = datetime('now')
+                    WHERE id = ? AND updated_at = ?
+                    """,
+                    (cal_date, performed_by, result, notes, record_id, expected_updated_at),
+                )
+                if cur.rowcount == 0:
+                    self.conn.rollback()
+                    raise StaleDataError("Calibration record was modified elsewhere. Refresh and try again.")
+            else:
+                cur.execute(
+                    """
+                    UPDATE calibration_records
+                    SET cal_date = ?, performed_by = ?, result = ?, notes = ?,
+                        updated_at = datetime('now')
+                    WHERE id = ?
+                    """,
+                    (cal_date, performed_by, result, notes, record_id),
+                )
 
             cur.execute(
                 "DELETE FROM calibration_values WHERE record_id = ?",
@@ -1661,12 +1805,15 @@ class CalibrationRepository:
         cur = self.conn.execute(sql, (f"-{days} days",))
         return [dict(r) for r in cur.fetchall()]
 
-    def get_instrument(self, instrument_id: int):
+    def get_instrument(self, instrument_id: int) -> "Instrument | None":
+        """Return Instrument model or None if not found."""
+        from domain.models import Instrument
+
         cur = self.conn.execute(
             "SELECT * FROM instruments WHERE id = ?", (instrument_id,)
         )
         row = cur.fetchone()
-        return dict(row) if row else None
+        return Instrument.from_row(row) if row else None
 
     def add_instrument(self, data: dict) -> int:
         # make sure key exists even if None
@@ -1702,26 +1849,53 @@ class CalibrationRepository:
         old = self.get_instrument(instrument_id) or {}
 
         data["id"] = instrument_id
-        self.conn.execute(
-            """
-            UPDATE instruments
-            SET tag_number         = :tag_number,
-                serial_number      = :serial_number,
-                description        = :description,
-                location           = :location,
-                calibration_type   = :calibration_type,
-                destination_id     = :destination_id,
-                last_cal_date      = :last_cal_date,
-                next_due_date      = :next_due_date,
-                frequency_months   = :frequency_months,
-                status             = :status,
-                notes              = :notes,
-                instrument_type_id = :instrument_type_id,
-                updated_at         = CURRENT_TIMESTAMP
-            WHERE id = :id
-            """,
-            data,
-        )
+        expected_updated_at = data.get("updated_at")
+        cur = self.conn.cursor()
+        if expected_updated_at is not None:
+            params = {**data, "expected_updated_at": expected_updated_at}
+            cur.execute(
+                """
+                UPDATE instruments
+                SET tag_number         = :tag_number,
+                    serial_number      = :serial_number,
+                    description        = :description,
+                    location           = :location,
+                    calibration_type   = :calibration_type,
+                    destination_id     = :destination_id,
+                    last_cal_date      = :last_cal_date,
+                    next_due_date      = :next_due_date,
+                    frequency_months   = :frequency_months,
+                    status             = :status,
+                    notes              = :notes,
+                    instrument_type_id = :instrument_type_id,
+                    updated_at         = CURRENT_TIMESTAMP
+                WHERE id = :id AND updated_at = :expected_updated_at
+                """,
+                params,
+            )
+            if cur.rowcount == 0:
+                raise StaleDataError("Instrument was modified by another user. Refresh and try again.")
+        else:
+            cur.execute(
+                """
+                UPDATE instruments
+                SET tag_number         = :tag_number,
+                    serial_number      = :serial_number,
+                    description        = :description,
+                    location           = :location,
+                    calibration_type   = :calibration_type,
+                    destination_id     = :destination_id,
+                    last_cal_date      = :last_cal_date,
+                    next_due_date      = :next_due_date,
+                    frequency_months   = :frequency_months,
+                    status             = :status,
+                    notes              = :notes,
+                    instrument_type_id = :instrument_type_id,
+                    updated_at         = CURRENT_TIMESTAMP
+                WHERE id = :id
+                """,
+                data,
+            )
         self.conn.commit()
 
         # simple field-by-field audit
@@ -1804,14 +1978,15 @@ class CalibrationRepository:
 
         dest_dir = get_attachments_dir() / str(instrument_id)
         dest_dir.mkdir(parents=True, exist_ok=True)
-        dest_path = dest_dir / src.name
+        unique_name = f"{src.stem}_{uuid.uuid4().hex[:8]}{src.suffix}"
+        dest_path = dest_dir / unique_name
 
         shutil.copy2(str(src), str(dest_path))
 
         self.conn.execute(
             "INSERT INTO attachments (instrument_id, filename, file_path, record_id) "
             "VALUES (?, ?, ?, ?)",
-            (instrument_id, src.name, str(dest_path), record_id),
+            (instrument_id, src.name, str(dest_path), record_id),  # filename = display name
         )
         self.conn.commit()
 

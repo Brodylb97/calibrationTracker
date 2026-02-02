@@ -4,13 +4,38 @@ Central tolerance evaluation for calibration templates.
 Single source of truth for: tolerance types, equation parsing, pass/fail logic.
 Used by CalibrationFormDialog and (future) template preview / explain.
 See TEMPLATE_SYSTEM_IMPROVEMENT_PLAN.md for full design.
+
+Equations use Excel-like syntax: + - * / ^ (power), < > <= >=, and functions ABS(), MIN(), MAX(), ROUND(), AVERAGE().
 """
 
 from __future__ import annotations
 
 import ast
 import operator
+import re
 from typing import Any
+
+
+def _excel_to_python(equation: str) -> str:
+    """
+    Convert Excel-style equation to Python-parseable form.
+    - ^ (caret) → ** (exponentiation)
+    - ABS(), MIN(), MAX(), ROUND() accepted in any case (normalized to lowercase for ast).
+    """
+    s = equation.strip()
+    # Excel uses ^ for power
+    s = s.replace("^", "**")
+    # Allow Excel-style function names (case-insensitive)
+    s = re.sub(r"\b(ABS|MIN|MAX|ROUND|AVERAGE)\s*\(", lambda m: m.group(1).lower() + "(", s, flags=re.IGNORECASE)
+    return s
+
+
+def _average(*args: float) -> float:
+    """Average of arguments (returns 0 if no args)."""
+    if not args:
+        return 0.0
+    return sum(args) / len(args)
+
 
 # Allowed AST node types and binary ops (no eval of user input)
 _ALLOWED_BINOPS = {
@@ -22,6 +47,13 @@ _ALLOWED_BINOPS = {
     ast.Pow: operator.pow,
     ast.Mod: operator.mod,
 }
+# Comparison ops return 1.0 (true) or 0.0 (false) for use in arithmetic
+_ALLOWED_COMPARE = {
+    ast.Lt: lambda a, b: 1.0 if a < b else 0.0,
+    ast.Gt: lambda a, b: 1.0 if a > b else 0.0,
+    ast.LtE: lambda a, b: 1.0 if a <= b else 0.0,
+    ast.GtE: lambda a, b: 1.0 if a >= b else 0.0,
+}
 _ALLOWED_UNARY = {
     ast.USub: operator.neg,
     ast.UAdd: operator.pos,
@@ -31,6 +63,7 @@ _ALLOWED_FUNCS = {
     "min": min,
     "max": max,
     "round": round,
+    "average": _average,
 }
 
 
@@ -56,6 +89,17 @@ def _eval_node(node: ast.AST, vars_map: dict[str, float]) -> float:
         if isinstance(node.op, ast.Div) and right == 0:
             raise ValueError("Division by zero")
         return op(left, right)
+    if isinstance(node, ast.Compare):
+        left = _eval_node(node.left, vars_map)
+        for op, comparator_node in zip(node.ops, node.comparators):
+            right = _eval_node(comparator_node, vars_map)
+            compare_fn = _ALLOWED_COMPARE.get(type(op))
+            if compare_fn is None:
+                raise ValueError(f"Disallowed comparison: {type(op).__name__}")
+            if compare_fn(left, right) == 0.0:
+                return 0.0
+            left = right
+        return 1.0
     if isinstance(node, ast.UnaryOp):
         op = _ALLOWED_UNARY.get(type(node.op))
         if op is None:
@@ -73,42 +117,60 @@ def _eval_node(node: ast.AST, vars_map: dict[str, float]) -> float:
 
 def parse_equation(equation: str) -> ast.Expression:
     """
-    Parse tolerance equation string. Returns AST body.
-    Raises ValueError on syntax error or disallowed construct.
+    Parse tolerance equation string (Excel-like: + - * / ^ and ABS, MIN, MAX, ROUND).
+    Returns AST body. Raises ValueError on syntax error or disallowed construct.
     """
     if not (equation or "").strip():
         raise ValueError("Equation is empty")
-    tree = ast.parse(equation.strip(), mode="eval")
+    eq = _excel_to_python(equation.strip())
+    tree = ast.parse(eq, mode="eval")
     # Reject attribute access, subscripts, etc.
     for node in ast.walk(tree):
         if isinstance(node, (ast.Attribute, ast.Subscript, ast.Lambda, ast.List, ast.Dict)):
-            raise ValueError("Only numeric expressions with + - * / ** and abs/min/max allowed")
+            raise ValueError("Only numeric expressions with + - * / ^ < > <= >= and ABS, MIN, MAX, ROUND, AVERAGE allowed")
     return tree.body
 
 
 def list_variables(equation: str) -> list[str]:
-    """Return ordered list of variable names used in the equation."""
+    """Return ordered list of variable names used in the equation (excludes function names)."""
     try:
-        tree = ast.parse(equation.strip(), mode="eval")
+        eq = _excel_to_python(equation.strip())
+        tree = ast.parse(eq, mode="eval")
     except SyntaxError:
         return []
     names = []
     seen = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and isinstance(getattr(node, "ctx", None), ast.Load):
+            if node.id in _ALLOWED_FUNCS:
+                continue  # skip function names (abs, min, max, round, average)
             if node.id not in seen:
                 seen.add(node.id)
                 names.append(node.id)
     return names
 
 
+def _ensure_val_aliases(vars_map: dict[str, float]) -> dict[str, float]:
+    """Ensure val1-val5 are set from ref1-ref5 for backward compatibility."""
+    v = dict(vars_map)
+    for i in range(1, 6):
+        rk, vk = f"ref{i}", f"val{i}"
+        if rk in v and vk not in v:
+            v[vk] = v[rk]
+        elif vk in v and rk not in v:
+            v[rk] = v[vk]
+    return v
+
+
 def evaluate_tolerance_equation(equation: str, vars_map: dict[str, float]) -> float:
     """
     Evaluate equation with given variables. Returns tolerance value.
     Raises ValueError on parse error, disallowed op, or missing variable.
+    val1-val5 are aliases for ref1-ref5.
     """
+    v = _ensure_val_aliases(vars_map)
     body = parse_equation(equation)
-    return _eval_node(body, vars_map)
+    return _eval_node(body, v)
 
 
 def evaluate_pass_fail(
@@ -127,10 +189,10 @@ def evaluate_pass_fail(
     Returns (pass, tolerance_used, explanation_plain).
     """
     vars_map = vars_map or {}
-    # Ensure nominal/reading in map for equation
     v = dict(vars_map)
     v.setdefault("nominal", nominal)
     v.setdefault("reading", reading)
+    v = _ensure_val_aliases(v)
 
     if tolerance_type == "bool":
         # Boolean tolerance: pass when value matches configured pass value (true/false)
@@ -157,14 +219,25 @@ def evaluate_pass_fail(
     if tolerance_type == "equation" and tolerance_equation:
         try:
             tol_value = evaluate_tolerance_equation(tolerance_equation, v)
+        except ValueError as e:
+            if "Division by zero" in str(e):
+                return False, 0.0, f"Division by zero in equation → FAIL"
+            return False, 0.0, f"Equation error: {e}"
         except Exception as e:
             return False, 0.0, f"Equation error: {e}"
         diff = abs(reading - nominal)
-        pass_ = diff <= tol_value
-        explanation = (
-            f"Tolerance (from equation) = {tol_value}; "
-            f"|reading − nominal| = {diff} → {'PASS' if pass_ else 'FAIL'}"
-        )
+        # Equation result 0 or 1 (from comparison) = direct pass/fail; otherwise treat as tolerance band
+        if abs(tol_value - round(tol_value)) < 1e-9 and 0 <= tol_value <= 1:
+            pass_ = tol_value >= 0.5
+            explanation = (
+                f"Equation (condition) = {int(round(tol_value))} (1=pass, 0=fail) → {'PASS' if pass_ else 'FAIL'}"
+            )
+        else:
+            pass_ = diff <= tol_value
+            explanation = (
+                f"Tolerance (from equation) = {tol_value}; "
+                f"|reading − nominal| = {diff} → {'PASS' if pass_ else 'FAIL'}"
+            )
         return pass_, tol_value, explanation
 
     if tolerance_type == "lookup" and tolerance_lookup_json:
@@ -219,8 +292,8 @@ def evaluate_tolerance_lookup(
     return 0.0
 
 
-# Allowed variable names for equation validation (extend as needed)
-ALLOWED_VARIABLES = {"nominal", "reading", "ref1", "ref2", "ref3", "ref4", "ref5", "ref", "value", "abs_nominal"}
+# Allowed variable names for equation validation (val1-val5 are aliases for ref1-ref5)
+ALLOWED_VARIABLES = {"nominal", "reading", "ref1", "ref2", "ref3", "ref4", "ref5", "val1", "val2", "val3", "val4", "val5", "ref", "value", "abs_nominal"}
 
 
 def validate_equation_variables(equation: str) -> tuple[bool, list[str]]:
@@ -231,3 +304,19 @@ def validate_equation_variables(equation: str) -> tuple[bool, list[str]]:
     names = list_variables(equation)
     unknown = [n for n in names if n not in ALLOWED_VARIABLES]
     return len(unknown) == 0, unknown
+
+
+def equation_has_pass_fail_condition(equation: str) -> bool:
+    """
+    Check that equation contains a comparison (<, >, <=, >=, ==).
+    Used for tolerance equations that must express pass/fail.
+    """
+    try:
+        body = parse_equation(equation.strip())
+    except (ValueError, SyntaxError):
+        return False
+
+    for node in ast.walk(body):
+        if isinstance(node, ast.Compare):
+            return True
+    return False

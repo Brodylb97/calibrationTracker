@@ -1,4 +1,6 @@
 # lan_listener.py – no win10toast, just native Windows message boxes
+# DEPRECATED: Not imported anywhere. Standalone listener for LAN reminder broadcasts.
+# Consider moving to scripts/ if needed later.
 
 import os
 import socket

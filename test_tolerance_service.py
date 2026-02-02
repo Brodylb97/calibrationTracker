@@ -22,6 +22,7 @@ from tolerance_service import (
     evaluate_pass_fail,
     evaluate_tolerance_lookup,
     validate_equation_variables,
+    equation_has_pass_fail_condition,
     ALLOWED_VARIABLES,
 )
 
@@ -34,6 +35,11 @@ class TestParseEquation(unittest.TestCase):
         parse_equation("abs(nominal) + 0.1")
         parse_equation("min(1, 2)")
         parse_equation("max(ref1, ref2)")
+        parse_equation("2^10")  # Excel-style power
+        parse_equation("ABS(nominal) * 0.02")  # Excel-style function name
+        parse_equation("reading < nominal")
+        parse_equation("nominal >= 0")
+        parse_equation("AVERAGE(ref1, ref2)")
 
     def test_empty_raises(self):
         with self.assertRaises(ValueError):
@@ -61,6 +67,13 @@ class TestListVariables(unittest.TestCase):
     def test_ref1_ref2(self):
         self.assertEqual(list_variables("ref1 - ref2"), ["ref1", "ref2"])
 
+    def test_list_variables_excludes_function_names(self):
+        # AVERAGE, abs, min, max, round are functions, not variables
+        self.assertEqual(
+            sorted(list_variables("(AVERAGE(ref2, ref3, ref4)-ref1)/ref1<=0.01")),
+            ["ref1", "ref2", "ref3", "ref4"],
+        )
+
     def test_no_vars(self):
         self.assertEqual(list_variables("1 + 2"), [])
 
@@ -77,6 +90,32 @@ class TestEvaluateToleranceEquation(unittest.TestCase):
             evaluate_tolerance_equation("0.02 * abs(nominal)", {"nominal": 100}),
             2.0,
         )
+
+    def test_excel_power(self):
+        self.assertAlmostEqual(evaluate_tolerance_equation("2^10", {}), 1024.0)
+
+    def test_excel_uppercase_abs(self):
+        self.assertAlmostEqual(
+            evaluate_tolerance_equation("0.02 * ABS(nominal)", {"nominal": 100}),
+            2.0,
+        )
+
+    def test_average(self):
+        self.assertAlmostEqual(
+            evaluate_tolerance_equation("AVERAGE(2, 4, 6)", {}),
+            4.0,
+        )
+        self.assertAlmostEqual(
+            evaluate_tolerance_equation("average(ref1, ref2)", {"ref1": 10, "ref2": 20}),
+            15.0,
+        )
+
+    def test_comparison_operators(self):
+        self.assertAlmostEqual(evaluate_tolerance_equation("1 < 2", {}), 1.0)
+        self.assertAlmostEqual(evaluate_tolerance_equation("1 > 2", {}), 0.0)
+        self.assertAlmostEqual(evaluate_tolerance_equation("2 <= 2", {}), 1.0)
+        self.assertAlmostEqual(evaluate_tolerance_equation("3 >= 2", {}), 1.0)
+        self.assertAlmostEqual(evaluate_tolerance_equation("2 >= 3", {}), 0.0)
 
     def test_division_by_zero_raises(self):
         with self.assertRaises(ValueError):
@@ -136,6 +175,25 @@ class TestEvaluatePassFail(unittest.TestCase):
         self.assertTrue(pass_, f"expected pass with tol={tol}")  # tol = 2, diff = 1
         self.assertAlmostEqual(tol, 2.0)
 
+    def test_equation_condition_0_or_1(self):
+        # Equation that returns 1 (true) or 0 (false) is treated as direct pass/fail
+        pass_, tol, _ = evaluate_pass_fail(
+            "equation", None, "(AVERAGE(ref2, ref3, ref4)-ref1)/ref1<=0.01",
+            100.0, 100.5,
+            vars_map={"ref1": 100, "ref2": 100.5, "ref3": 100.5, "ref4": 100.5},
+            tolerance_lookup_json=None,
+        )
+        self.assertTrue(pass_, "condition true (within 1%) should pass")
+        self.assertAlmostEqual(tol, 1.0)
+        pass2, tol2, _ = evaluate_pass_fail(
+            "equation", None, "(AVERAGE(ref2, ref3, ref4)-ref1)/ref1<=0.01",
+            100.0, 100.5,
+            vars_map={"ref1": 100, "ref2": 110, "ref3": 120, "ref4": 130},
+            tolerance_lookup_json=None,
+        )
+        self.assertFalse(pass2, "condition false (outside 1%) should fail")
+        self.assertAlmostEqual(tol2, 0.0)
+
     def test_lookup(self):
         j = '[{"range_low": 0, "range_high": 100, "tolerance": 1.0}]'
         pass_, tol, _ = evaluate_pass_fail(
@@ -173,6 +231,26 @@ class TestValidateEquationVariables(unittest.TestCase):
         ok, unknown = validate_equation_variables("nominal + xyz")
         self.assertFalse(ok)
         self.assertIn("xyz", unknown)
+
+    def test_val1_val5_allowed(self):
+        ok, unknown = validate_equation_variables("val1 + val2")
+        self.assertTrue(ok)
+        self.assertEqual(unknown, [])
+        self.assertAlmostEqual(
+            evaluate_tolerance_equation("val1 + val2", {"val1": 10, "val2": 20}), 30.0
+        )
+
+
+class TestEquationPassFailCondition(unittest.TestCase):
+    def test_has_condition(self):
+        self.assertTrue(equation_has_pass_fail_condition("reading <= 0.02 * nominal"))
+        self.assertTrue(equation_has_pass_fail_condition("val1 < val2"))
+        self.assertTrue(equation_has_pass_fail_condition("nominal > 0"))
+        self.assertTrue(equation_has_pass_fail_condition("reading == nominal"))
+
+    def test_no_condition(self):
+        self.assertFalse(equation_has_pass_fail_condition("0.02 * nominal"))
+        self.assertFalse(equation_has_pass_fail_condition("nominal + 1"))
 
 
 def run_unittest():

@@ -7,9 +7,9 @@ This document provides step-by-step instructions for creating a distribution pac
 To run the full release sequence in order (update version, build exe, build update zip, build installer, git commit), use:
 
 ```batch
-py release.py              REM prompts for version
-py release.py 1.3.6        REM use version 1.3.6
-py release.py --no-commit  REM do everything except git commit
+py scripts/release.py              REM prompts for version
+py scripts/release.py 1.3.6        REM use version 1.3.6
+py scripts/release.py --no-commit  REM do everything except git commit
 ```
 
 This runs: 1) Update VERSION and CalibrationTracker.iss, 2) Build executable (PyInstaller), 3) Build update package (CalibrationTracker-windows.zip), 4) Build installer (Inno Setup), 5) Git commit. You can then create a GitHub Release and upload the zip, and `git push` if desired.
@@ -77,7 +77,7 @@ For **Check for Updates** to deliver new UI and features (not just a new VERSION
 2. Run `build_executable.bat` (and `restart_helper\build.bat` if needed) so `dist\` has the new exe.
 3. Create the update zip:
    ```batch
-   py build_update_package.py
+   py scripts/build_update_package.py
    ```
    This creates `installer\CalibrationTracker-windows.zip` with the exe, RestartHelper, and runtime files.
 4. Create a **GitHub Release** for that version (e.g. v1.3.0), and **upload** `CalibrationTracker-windows.zip` as the release asset. Use the **exact** asset name: `CalibrationTracker-windows.zip`.

@@ -26,6 +26,16 @@ py -m pip install -r requirements.txt
 py main.py
 ```
 
+## Configuration
+
+The database path can be configured for different environments (dev, staging, other sites):
+
+1. **Config file**: Copy `config.example.json` to `config.json` and set `db_path` to your database path (absolute or relative to the config file).
+2. **Alternative**: Add `db_path` to `update_config.json` if you already use it for update settings.
+3. **Environment variable**: Set `CALIBRATION_TRACKER_DB_PATH` to override any config file.
+
+If none of these are set, the app uses the default path (see `config.example.json`). The config file must be in the same directory as the executable or script.
+
 ## Build executable and installer
 
 1. **Executable only:**  
@@ -35,7 +45,7 @@ py main.py
    `build_installer.bat` (builds exe then compiles `CalibrationTracker.iss` with Inno Setup if ISCC is available), or run `build_executable.bat` then open `CalibrationTracker.iss` in Inno Setup and compile.
 
 3. **Update package (for in-app updates):**  
-   After building the exe, run `py build_update_package.py` → produces `installer\CalibrationTracker-windows.zip`. Upload that file to a GitHub Release (asset name: `CalibrationTracker-windows.zip`) so “Check for Updates” delivers the new exe and UI to installed users.
+   After building the exe, run `py scripts/build_update_package.py` → produces `installer\CalibrationTracker-windows.zip`. Upload that file to a GitHub Release (asset name: `CalibrationTracker-windows.zip`) so “Check for Updates” delivers the new exe and UI to installed users.
 
 4. **Source distribution folder:**  
    `build_distribution.bat` → creates `dist\CalibrationTracker\` with all sources and docs.

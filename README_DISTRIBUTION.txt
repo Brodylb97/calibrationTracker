@@ -21,7 +21,7 @@ FILES INCLUDED
 - *.py                    : Python source files (including database_backup.py, update_checker.py, update_app.py, pdf_export.py)
 - requirements.txt       : Python dependencies
 - build_executable.bat    : Script to build standalone executable (uses py)
-- build_update_package.py : Script to create update zip (run after build_executable.bat; upload to GitHub Releases)
+- scripts/build_update_package.py : Script to create update zip (run after build_executable.bat; upload to GitHub Releases)
 - build_distribution.bat  : Script to create source distribution folder
 - build_installer.bat     : Script to build exe then compile Inno installer in one go
 - CalibrationTracker.iss : Inno Setup installer script
