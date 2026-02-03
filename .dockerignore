@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+.venv/
+env/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Database and runtime data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.migrating
+attachments/
+Signatures/
+
+# Logs and temp
+logs/
+*.log
+*.tmp
+*.temp
+
+# IDE and tooling
+.vscode/
+.idea/
+.cursor/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Config (use config.example.json or env in container)
+config.json
+update_config.json
+
+# Distribution and installer (not needed in image)
+installer/
+*.exe
+CalibrationTracker.iss
+
+# Git and docs (optional: remove if you want docs in image)
+.git/
+.gitignore
+
+# Improvement plans and analysis (not needed for run)
+Improvement Plans/
+Old/
+
+# Restart helper C source (app is Python in container)
+restart_helper/

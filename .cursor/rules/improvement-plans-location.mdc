@@ -1,0 +1,16 @@
+---
+description: Where to store improvement and analysis markdown files
+alwaysApply: true
+---
+
+# Improvement Plans – File Location
+
+When generating markdown files for **improvements, proposals, analyses, or plans** (e.g. architecture improvements, UX analysis, structural analysis, safety improvements, design docs), **store them in the subdirectory:**
+
+**`Improvement Plans/`**
+
+- Use the existing folder at the project root: `Improvement Plans/` (with a space).
+- Do not create new improvement-plan markdown files in the project root or in other ad-hoc locations.
+- Examples: `Improvement Plans/ARCHITECTURE_IMPROVEMENT_PROPOSAL.md`, `Improvement Plans/UX_IMPROVEMENT_ANALYSIS.md`.
+
+This keeps all improvement and planning documentation in one place.

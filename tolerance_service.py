@@ -53,6 +53,17 @@ _ALLOWED_COMPARE = {
     ast.Gt: lambda a, b: 1.0 if a > b else 0.0,
     ast.LtE: lambda a, b: 1.0 if a <= b else 0.0,
     ast.GtE: lambda a, b: 1.0 if a >= b else 0.0,
+    ast.Eq: lambda a, b: 1.0 if a == b else 0.0,
+    ast.NotEq: lambda a, b: 1.0 if a != b else 0.0,
+}
+# Symbol strings for display (e.g. "calculated op compared, PASS")
+_COMPARE_SYMBOLS = {
+    ast.Lt: "<",
+    ast.Gt: ">",
+    ast.LtE: "<=",
+    ast.GtE: ">=",
+    ast.Eq: "==",
+    ast.NotEq: "!=",
 }
 _ALLOWED_UNARY = {
     ast.USub: operator.neg,
@@ -320,3 +331,46 @@ def equation_has_pass_fail_condition(equation: str) -> bool:
         if isinstance(node, ast.Compare):
             return True
     return False
+
+
+def format_calculation_display(value: float, sig_figs: int = 3) -> str:
+    """Format a calculated value for display with given significant figures (default 3)."""
+    if value == 0:
+        return "0"
+    try:
+        return f"{value:.{sig_figs}g}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def equation_tolerance_display(
+    equation: str, vars_map: dict[str, float]
+) -> tuple[float, str, float, bool] | None:
+    """
+    For equation-type tolerance with a single comparison (e.g. reading <= 0.02*nominal),
+    return (lhs_value, op_str, rhs_value, pass) for display as "lhs op rhs, PASS" or ", FAIL".
+    Returns None if equation is not a single comparison (e.g. tolerance band expression).
+    """
+    if not (equation or "").strip():
+        return None
+    try:
+        body = parse_equation(equation.strip())
+    except (ValueError, SyntaxError):
+        return None
+    if not isinstance(body, ast.Compare) or len(body.ops) != 1 or len(body.comparators) != 1:
+        return None
+    v = _ensure_val_aliases(dict(vars_map))
+    try:
+        lhs = _eval_node(body.left, v)
+        op = body.ops[0]
+        op_str = _COMPARE_SYMBOLS.get(type(op))
+        if op_str is None:
+            return None
+        rhs = _eval_node(body.comparators[0], v)
+        compare_fn = _ALLOWED_COMPARE.get(type(op))
+        if compare_fn is None:
+            return None
+        pass_ = compare_fn(lhs, rhs) >= 0.5
+        return (lhs, op_str, rhs, pass_)
+    except (ValueError, TypeError):
+        return None

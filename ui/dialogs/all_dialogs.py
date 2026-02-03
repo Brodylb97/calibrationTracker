@@ -1086,7 +1086,7 @@ class FieldEditDialog(QtWidgets.QDialog):
         self.label_edit.setMinimumWidth(_min_field_w)
 
         self.type_combo = QtWidgets.QComboBox()
-        self.type_combo.addItems(["text", "number", "bool", "date", "signature", "reference"])
+        self.type_combo.addItems(["text", "number", "bool", "date", "signature", "reference", "tolerance"])
         dt = self.field.get("data_type") or "text"
         idx = self.type_combo.findText(dt)
         if idx >= 0:
@@ -1270,15 +1270,34 @@ class FieldEditDialog(QtWidgets.QDialog):
         self._populate_value_combos()
 
     def _on_type_changed(self, data_type: str):
-        """Show/hide Unit (when number) and Reference value (when reference)."""
+        """Show/hide Unit (when number), Reference value (when reference). Show tolerance section for bool and tolerance types."""
         is_number = (data_type == "number")
         is_reference = (data_type == "reference")
+        is_tolerance = (data_type == "tolerance")
+        is_bool = (data_type == "bool")
         if hasattr(self, "unit_edit") and hasattr(self, "unit_label"):
             self.unit_edit.setVisible(is_number)
             self.unit_label.setVisible(is_number)
         if hasattr(self, "reference_value_edit") and hasattr(self, "reference_value_label"):
             self.reference_value_edit.setVisible(is_reference)
             self.reference_value_label.setVisible(is_reference)
+        # When type is bool: show tolerance section with Boolean selected so user can set pass when True/False
+        if is_bool and hasattr(self, "tol_type_combo"):
+            idx = self.tol_type_combo.findData("bool")
+            if idx >= 0:
+                self.tol_type_combo.setCurrentIndex(idx)
+        # Tolerance type: show equation section (read-only display in calibration form)
+        if is_tolerance and hasattr(self, "tol_type_combo"):
+            self.tol_type_combo.setCurrentIndex(self.tol_type_combo.findData("equation"))
+        if hasattr(self, "tol_type_combo"):
+            self._on_tolerance_type_changed(self.tol_type_combo.currentIndex())
+        if is_tolerance and hasattr(self, "test_group"):
+            self.test_group.setVisible(False)
+        # Tolerance-type fields are display-only; hide Required and treat as not required
+        if hasattr(self, "required_check"):
+            self.required_check.setVisible(not is_tolerance)
+            if is_tolerance:
+                self.required_check.setChecked(False)
 
     def _on_tolerance_type_changed(self, index: int):
         """Show equation edit and val1-val5 when Equation; bool pass combo for Boolean."""
@@ -1402,12 +1421,15 @@ class FieldEditDialog(QtWidgets.QDialog):
         tolerance_equation = None
         ref1_name = ref2_name = ref3_name = ref4_name = ref5_name = None
 
+        # Tolerance type (read-only display field) requires equation like equation tolerance
+        if data_type == "tolerance":
+            tol_type = "equation"
         if tol_type == "equation":
             tolerance_equation = self.tol_equation_edit.text().strip() or None
             if not tolerance_equation:
                 QtWidgets.QMessageBox.warning(
                     self, "Validation",
-                    "Tolerance equation is required when tolerance type is Equation.",
+                    "Tolerance equation is required for Equation tolerance and for Tolerance type fields.",
                 )
                 return None
             try:
@@ -1650,6 +1672,9 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
         )
 
     def _load_fields(self):
+        # Remember current sort so we can reapply after reload (don't jump back to Sort column)
+        sort_col = self.table.horizontalHeader().sortIndicatorSection()
+        sort_order = self.table.horizontalHeader().sortIndicatorOrder()
         # Disable sorting and updates while loading for better performance
         self.table.setSortingEnabled(False)
         self.table.setUpdatesEnabled(False)
@@ -1715,7 +1740,11 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                 self.table.setItem(row, 2, mk(f.get("data_type", "")))
                 self.table.setItem(row, 3, mk(f.get("unit") or ""))
                 self.table.setItem(row, 4, mk("Yes" if f.get("required") else ""))
-                self.table.setItem(row, 5, mk(str(f.get("sort_order", 0))))
+                # Sort column: use integer so table sorts 1, 2, 3... not 1, 10, 100, 2, 20
+                sort_val = int(f.get("sort_order", 0)) if f.get("sort_order") is not None else 0
+                sort_item = QtWidgets.QTableWidgetItem()
+                sort_item.setData(QtCore.Qt.DisplayRole, sort_val)
+                self.table.setItem(row, 5, sort_item)
                 self.table.setItem(row, 6, mk(f.get("group_name") or ""))
                 self.table.setItem(row, 7, mk(calc_desc))
                 self.table.setItem(row, 8, mk(tol_txt))
@@ -1736,10 +1765,15 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
             else:
                 self.summary_label.setText(f"{n} point(s)")
         finally:
-            # Re-enable updates, enable sorting, default sort by Sort column ascending
+            # Re-enable updates, enable sorting, reapply previous sort (or default Sort column ascending)
             self.table.setUpdatesEnabled(True)
             self.table.setSortingEnabled(True)
-            self.table.sortItems(5, QtCore.Qt.AscendingOrder)
+            if sort_col >= 0 and sort_col < self.table.columnCount():
+                self.table.sortItems(sort_col, sort_order)
+                self.table.horizontalHeader().setSortIndicator(sort_col, sort_order)
+            else:
+                self.table.sortItems(5, QtCore.Qt.AscendingOrder)
+                self.table.horizontalHeader().setSortIndicator(5, QtCore.Qt.AscendingOrder)
             self.table.viewport().update()
             QtWidgets.QApplication.processEvents()
 
@@ -2100,7 +2134,7 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         layout.addWidget(self.table)
 
         # Details area: calculated values and bool pass/fail per point
-        layout.addWidget(QtWidgets.QLabel("Values per point (calculated & pass/fail):"))
+        layout.addWidget(QtWidgets.QLabel("Tolerance values (pass/fail):"))
         self.details = QtWidgets.QPlainTextEdit()
         self.details.setReadOnly(True)
         self.details.setMinimumHeight(170)
@@ -2364,9 +2398,55 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         rec = self.repo.get_calibration_record_with_template(rec_id)
         self._update_record_buttons()
 
-        values_by_name = {v.get("field_name"): v.get("value_text") for v in vals}
+        # Build values_by_name: key by field name and by label so ref lookups work (calc_ref*_name may be name or label)
+        values_by_name = {}
+        for v in vals:
+            val_text = v.get("value_text")
+            fn = (v.get("field_name") or "").strip()
+            if fn:
+                values_by_name[fn] = val_text
+            lbl = (v.get("label") or "").strip()
+            if lbl and lbl != fn:
+                values_by_name[lbl] = val_text
+        for v in vals:
+            fn = v.get("field_name")
+            if fn and fn not in values_by_name:
+                values_by_name[fn] = v.get("value_text")
+            lbl = v.get("label")
+            if lbl and lbl not in values_by_name:
+                values_by_name[lbl] = v.get("value_text")
+
         lines = []
         last_group = None
+
+        # Merge template field metadata so tolerance_type/equation are always available
+        template_fields_by_id = {}
+        if rec and rec.get("template_id"):
+            try:
+                for tf in self.repo.list_template_fields(rec["template_id"]):
+                    template_fields_by_id[tf["id"]] = tf
+            except Exception:
+                pass
+
+        # Key values_by_name by template field name/label too so tolerance refs (calc_ref*_name) always match
+        for v in vals:
+            tf = template_fields_by_id.get(v.get("field_id"))
+            if tf:
+                tname = (tf.get("name") or "").strip()
+                tlabel = (tf.get("label") or "").strip()
+                val_text = v.get("value_text")
+                if tname:
+                    values_by_name[tname] = val_text
+                if tlabel and tlabel != tname:
+                    values_by_name[tlabel] = val_text
+
+        def _get_value(name):
+            if not name:
+                return None
+            v = values_by_name.get(name)
+            if v is not None:
+                return v
+            return values_by_name.get((name or "").strip())
 
         try:
             from tolerance_service import evaluate_pass_fail
@@ -2374,6 +2454,16 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
             evaluate_pass_fail = None
 
         for v in vals:
+            fid = v.get("field_id")
+            tf = template_fields_by_id.get(fid) or {}
+            # Merge template field metadata so tolerance_type/equation/refs are available even if JOIN didn't return them
+            v_merged = dict(v)
+            for key in ("group_name", "label", "unit", "calc_type", "data_type", "tolerance_type",
+                        "tolerance_equation", "tolerance", "nominal_value", "tolerance_lookup_json",
+                        "calc_ref1_name", "calc_ref2_name", "calc_ref3_name", "calc_ref4_name", "calc_ref5_name"):
+                if (v_merged.get(key) is None or v_merged.get(key) == "") and tf.get(key) not in (None, ""):
+                    v_merged[key] = tf[key]
+            v = v_merged
             group = v.get("group_name") or ""
             label = v.get("label") or v.get("field_name") or ""
             unit = v.get("unit") or ""
@@ -2391,15 +2481,9 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
             prefix = f"{group}, " if group else ""
             unit_str = f" {unit}" if unit else ""
 
-            # 0) Custom equation (pass/fail from formula)
-            if calc_type == "CUSTOM_EQUATION":
-                val_txt = values_by_name.get(f["name"]) if f.get("name") else None
-                if val_txt not in (None, ""):
-                    line = f"{prefix}{label}: {val_txt}"
-                    lines.append(line)
-                continue
+            # Cal history shows only tolerance values (pass/fail results)
 
-            # 1) Computed difference fields (ABS_DIFF, PCT_ERROR, PCT_DIFF, MIN_OF, MAX_OF, RANGE_OF) with tolerance
+            # 1) Computed difference fields (ABS_DIFF, etc.) with tolerance
             if calc_type in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF", "MIN_OF", "MAX_OF", "RANGE_OF"):
                 if not val_txt:
                     continue
@@ -2420,6 +2504,7 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
 
                 status = ""
                 tol_used = ""
+                display_parts = None  # (lhs, op, rhs, pass) for equation comparison display
                 if evaluate_pass_fail and (tol_fixed is not None or v.get("tolerance_equation") or v.get("tolerance_lookup_json")):
                     ref1_name = v.get("calc_ref1_name")
                     ref2_name = v.get("calc_ref2_name")
@@ -2435,63 +2520,246 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                             pass
                     vars_map = {"nominal": nominal, "reading": diff}
                     for i, r in enumerate((ref1_name, ref2_name, ref3_name, ref4_name, ref5_name), 1):
-                        if r and r in values_by_name:
-                            try:
-                                vars_map[f"ref{i}"] = float(values_by_name[r] or 0)
-                            except (TypeError, ValueError):
-                                vars_map[f"ref{i}"] = 0.0
-                    try:
-                        pass_, tol_val, _ = evaluate_pass_fail(
-                            tol_type,
-                            tol_fixed,
-                            v.get("tolerance_equation"),
-                            nominal,
-                            diff,
-                            vars_map=vars_map,
-                            tolerance_lookup_json=v.get("tolerance_lookup_json"),
-                        )
-                        status = "\u2713 PASS" if pass_ else "\u2717 FAIL"
-                        if tol_val is not None and tol_val != 0:
-                            tol_used = f" (tol ±{tol_val})"
-                    except Exception:
-                        if tol_fixed is not None:
-                            status = "\u2713 PASS" if diff <= tol_fixed else "\u2717 FAIL"
+                        if r:
+                            rv = _get_value(r)
+                            if rv is not None:
+                                try:
+                                    vars_map[f"ref{i}"] = float(rv or 0)
+                                except (TypeError, ValueError):
+                                    vars_map[f"ref{i}"] = 0.0
+                    # Equation tolerance: show "calculated op compared, PASS/FAIL"
+                    if tol_type == "equation" and v.get("tolerance_equation"):
+                        try:
+                            from tolerance_service import equation_tolerance_display
+                            display_parts = equation_tolerance_display(v.get("tolerance_equation"), vars_map)
+                        except ImportError:
+                            pass
+                    if display_parts is None:
+                        try:
+                            pass_, tol_val, _ = evaluate_pass_fail(
+                                tol_type,
+                                tol_fixed,
+                                v.get("tolerance_equation"),
+                                nominal,
+                                diff,
+                                vars_map=vars_map,
+                                tolerance_lookup_json=v.get("tolerance_lookup_json"),
+                            )
+                            status = "\u2713 PASS" if pass_ else "\u2717 FAIL"
+                            # Only show "tol ±X" when it's a tolerance band, not a comparison (0/1)
+                            if tol_val is not None and tol_val != 0 and not (abs(tol_val - round(tol_val)) < 1e-9 and 0 <= tol_val <= 1):
+                                tol_used = f" (tol ±{tol_val})"
+                        except Exception:
+                            if tol_fixed is not None:
+                                status = "\u2713 PASS" if diff <= tol_fixed else "\u2717 FAIL"
                 elif tol_fixed is not None:
                     status = "\u2713 PASS" if diff <= tol_fixed else "\u2717 FAIL"
 
-                line = f"{prefix}{label}: {val_txt}{unit_str}{tol_used}"
-                if status:
-                    line += f"  {status}"
+                if display_parts is not None:
+                    lhs, op_str, rhs, pass_ = display_parts
+                    from tolerance_service import format_calculation_display
+                    line = f"{prefix}{label}: {format_calculation_display(lhs, sig_figs=3)} {op_str} {format_calculation_display(rhs, sig_figs=3)}, {'PASS' if pass_ else 'FAIL'}"
+                else:
+                    try:
+                        num_val = float(str(val_txt).strip())
+                        from tolerance_service import format_calculation_display
+                        val_display = format_calculation_display(num_val, sig_figs=3)
+                    except (TypeError, ValueError):
+                        val_display = val_txt
+                    line = f"{prefix}{label}: {val_display}{unit_str}{tol_used}"
+                    if status:
+                        line += f"  {status}"
                 lines.append(line)
                 continue
 
-            # 2) Bool fields with bool tolerance (pass when true/false)
+            # 2) Bool fields with bool tolerance — display single "Pass" or "Fail" (not "True ✓ PASS" / "Pass, Pass")
             if data_type == "bool" and tol_type == "bool":
                 pass_when = (v.get("tolerance_equation") or "true").strip().lower()
-                if pass_when not in ("true", "false"):
-                    continue
                 reading_bool = val_txt in ("1", "true", "yes", "on")
+                if pass_when not in ("true", "false"):
+                    # Still show value so cal history is never empty for this field
+                    line = f"{prefix}{label}: {'Pass' if reading_bool else 'Fail'}"
+                    lines.append(line)
+                    continue
                 reading_float = 1.0 if reading_bool else 0.0
-                value_display = "True" if reading_bool else "False"
-                status = ""
+                result = "Fail"
                 if evaluate_pass_fail:
                     try:
                         pass_, _, _ = evaluate_pass_fail(
                             "bool", None, pass_when, 0.0, reading_float,
                             vars_map={}, tolerance_lookup_json=None,
                         )
-                        status = "\u2713 PASS" if pass_ else "\u2717 FAIL"
+                        result = "Pass" if pass_ else "Fail"
                     except Exception:
                         pass
-                line = f"{prefix}{label}: {value_display}"
-                if status:
-                    line += f"  {status}"
+                line = f"{prefix}{label}: {result}"
                 lines.append(line)
+                continue
+
+            # 3) Other fields with value and tolerance (number, reference, equation, percent, lookup)
+            if val_txt is not None and val_txt != "" and (v.get("tolerance_equation") or v.get("tolerance") is not None or tol_type in ("equation", "percent", "lookup")):
+                reading = 0.0
+                try:
+                    reading = float(str(val_txt).strip())
+                except (TypeError, ValueError):
+                    pass
+                nominal = 0.0
+                nominal_str = v.get("nominal_value")
+                if nominal_str not in (None, ""):
+                    try:
+                        nominal = float(str(nominal_str).strip())
+                    except (TypeError, ValueError):
+                        pass
+                vars_map = {"nominal": nominal, "reading": reading}
+                for i, r in enumerate((v.get("calc_ref1_name"), v.get("calc_ref2_name"), v.get("calc_ref3_name"), v.get("calc_ref4_name"), v.get("calc_ref5_name")), 1):
+                    if r:
+                        rv = _get_value(r)
+                        if rv is not None:
+                            try:
+                                vars_map[f"ref{i}"] = float(rv or 0)
+                            except (TypeError, ValueError):
+                                vars_map[f"ref{i}"] = 0.0
+                display_parts = None
+                if tol_type == "equation" and v.get("tolerance_equation") and evaluate_pass_fail:
+                    try:
+                        from tolerance_service import equation_tolerance_display
+                        display_parts = equation_tolerance_display(v.get("tolerance_equation"), vars_map)
+                    except ImportError:
+                        pass
+                if display_parts is not None:
+                    lhs, op_str, rhs, pass_ = display_parts
+                    from tolerance_service import format_calculation_display
+                    line = f"{prefix}{label}: {format_calculation_display(lhs, sig_figs=3)} {op_str} {format_calculation_display(rhs, sig_figs=3)}, {'PASS' if pass_ else 'FAIL'}"
+                else:
+                    try:
+                        from tolerance_service import format_calculation_display
+                        val_display = format_calculation_display(reading, sig_figs=3)
+                    except (TypeError, ValueError):
+                        val_display = val_txt
+                    line = f"{prefix}{label}: {val_display}{unit_str}"
+                    if evaluate_pass_fail and (v.get("tolerance_equation") or v.get("tolerance") is not None or v.get("tolerance_lookup_json")):
+                        try:
+                            tol_fixed = None
+                            tol_raw = v.get("tolerance")
+                            if tol_raw not in (None, ""):
+                                try:
+                                    tol_fixed = float(str(tol_raw))
+                                except (TypeError, ValueError):
+                                    pass
+                            pass_, _, _ = evaluate_pass_fail(
+                                tol_type,
+                                tol_fixed,
+                                v.get("tolerance_equation"),
+                                nominal,
+                                reading,
+                                vars_map=vars_map,
+                                tolerance_lookup_json=v.get("tolerance_lookup_json"),
+                            )
+                            line += f"  \u2713 PASS" if pass_ else f"  \u2717 FAIL"
+                        except Exception:
+                            pass
+                lines.append(line)
+                continue
+
+        # 4) Tolerance-type (data_type "tolerance") fields: not stored in calibration_values;
+        #    compute pass/fail from other stored values so they show in cal history.
+        if rec and rec.get("template_id"):
+            try:
+                template_fields = self.repo.list_template_fields(rec["template_id"])
+            except Exception:
+                template_fields = []
+            stored_field_ids = {v.get("field_id") for v in vals}
+            for f in template_fields:
+                if f.get("id") in stored_field_ids:
+                    continue
+                if (f.get("data_type") or "").strip().lower() != "tolerance":
+                    continue
+                eq = (f.get("tolerance_equation") or "").strip()
+                if not eq:
+                    continue
+                group = f.get("group_name") or ""
+                label = f.get("label") or f.get("name") or ""
+                prefix = f"{group}, " if group else ""
+                nominal = 0.0
+                nominal_str = f.get("nominal_value")
+                if nominal_str not in (None, ""):
+                    try:
+                        nominal = float(str(nominal_str).strip())
+                    except (TypeError, ValueError):
+                        pass
+                vars_map = {"nominal": nominal, "reading": 0.0}
+                for i in range(1, 6):
+                    ref_name = f.get(f"calc_ref{i}_name")
+                    rv = _get_value(ref_name) if ref_name else None
+                    if ref_name and rv not in (None, ""):
+                        try:
+                            vars_map[f"ref{i}"] = float(str(rv).strip())
+                        except (TypeError, ValueError):
+                            pass
+                try:
+                    from tolerance_service import list_variables
+                    if "reading" in list_variables(eq):
+                        ref1 = f.get("calc_ref1_name")
+                        rv1 = _get_value(ref1) if ref1 else None
+                        if ref1 and rv1 not in (None, ""):
+                            try:
+                                vars_map["reading"] = float(str(rv1).strip())
+                            except (TypeError, ValueError):
+                                pass
+                except ImportError:
+                    pass
+                # val1-val5 are aliases for ref1-ref5 so equations using val1 work
+                for i in range(1, 6):
+                    rk, vk = f"ref{i}", f"val{i}"
+                    if rk in vars_map and vk not in vars_map:
+                        vars_map[vk] = vars_map[rk]
+                    elif vk in vars_map and rk not in vars_map:
+                        vars_map[rk] = vars_map[vk]
+                try:
+                    from tolerance_service import equation_tolerance_display, list_variables, format_calculation_display
+                    required = list_variables(eq)
+                    if any(var not in vars_map for var in required):
+                        # Still show something so user sees the tolerance field exists
+                        if last_group is not None and group != last_group and lines and lines[-1] != "":
+                            lines.append("")
+                        last_group = group
+                        missing = [var for var in required if var not in vars_map]
+                        line = f"{prefix}{label}: — (need: {', '.join(missing)})"
+                        lines.append(line)
+                        continue
+                    parts = equation_tolerance_display(eq, vars_map)
+                    if last_group is not None and group != last_group and lines and lines[-1] != "":
+                        lines.append("")
+                    last_group = group
+                    if parts is not None:
+                        lhs, op_str, rhs, pass_ = parts
+                        line = f"{prefix}{label}: {format_calculation_display(lhs, sig_figs=3)} {op_str} {format_calculation_display(rhs, sig_figs=3)}, {'PASS' if pass_ else 'FAIL'}"
+                        lines.append(line)
+                    elif evaluate_pass_fail:
+                        try:
+                            reading = vars_map.get("reading", 0.0)
+                            pass_, _, _ = evaluate_pass_fail(
+                                "equation", None, eq, nominal, reading,
+                                vars_map=vars_map, tolerance_lookup_json=None,
+                            )
+                            line = f"{prefix}{label}: {'PASS' if pass_ else 'FAIL'}"
+                            lines.append(line)
+                        except Exception:
+                            pass
+                except (ImportError, ValueError, TypeError):
+                    pass
 
         if not lines:
-            self.details.setPlainText(
-                "No calculated or pass/fail values recorded for this calibration."
-            )
+            if rec and not vals:
+                self.details.setPlainText(
+                    "No data recorded for this calibration.\n\n"
+                    "Open View/Edit, enter values, and save to see tolerance (equation/boolean) pass/fail results here."
+                )
+            else:
+                self.details.setPlainText(
+                    "No tolerance (pass/fail) values recorded for this calibration.\n\n"
+                    "Templates must have equation or boolean tolerance fields (or tolerance on number/computed fields) to show results here."
+                )
         else:
             # Add two new lines after the last point difference
             lines.append("")
@@ -2943,6 +3211,7 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         self.date_edit = QtWidgets.QDateEdit(calendarPopup=True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
         self.date_edit.setDate(QtCore.QDate.currentDate())
+        self.date_edit.dateChanged.connect(self._sync_date_to_all_date_fields)
 
         # Performed by: personnel combo (from template authorized list or all) + Other
         self.performed_combo = QtWidgets.QComboBox()
@@ -2955,10 +3224,7 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         meta_layout.addRow("Performed by", self.performed_combo)
         meta_layout.addRow("", self.performed_other_edit)
 
-        self.result_combo = QtWidgets.QComboBox()
-        self.result_combo.addItems(["PASS", "FAIL", "OUT_OF_TOL", "OTHER"])
-
-        meta_layout.addRow("Result", self.result_combo)
+        # Result is auto-assigned from tolerance/boolean pass-fail when saving (no user selection)
 
         layout.addWidget(meta_group)
         
@@ -2995,6 +3261,20 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         if self.read_only:
             self._set_read_only()
     
+    def _sync_date_to_all_date_fields(self, new_date):
+        """When Cal date is changed, set all date-type template fields to the same date."""
+        if not hasattr(self, "fields") or not hasattr(self, "field_widgets"):
+            return
+        for f in self.fields:
+            if (f.get("data_type") or "").strip().lower() != "date":
+                continue
+            fid = f.get("id")
+            w = self.field_widgets.get(fid)
+            if w and isinstance(w, QtWidgets.QDateEdit):
+                w.blockSignals(True)
+                w.setDate(new_date)
+                w.blockSignals(False)
+
     def _on_performed_combo_changed(self, index):
         is_other = self.performed_combo.currentText() == "Other..."
         self.performed_other_edit.setVisible(is_other)
@@ -3031,7 +3311,6 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         self.date_edit.setEnabled(False)
         self.performed_combo.setEnabled(False)
         self.performed_other_edit.setEnabled(False)
-        self.result_combo.setEnabled(False)
         for w in self.field_widgets.values():
             w.setEnabled(False)
         ok_btn = self.btn_box.button(QtWidgets.QDialogButtonBox.Ok)
@@ -3040,6 +3319,7 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         cancel_btn = self.btn_box.button(QtWidgets.QDialogButtonBox.Cancel)
         if cancel_btn:
             cancel_btn.setText("Close")
+        # Result combo removed; result is derived from tolerance pass/fail
 
     def _show_help(self):
         title, content = get_help_content("CalibrationFormDialog")
@@ -3165,7 +3445,11 @@ class CalibrationFormDialog(QtWidgets.QDialog):
 
         self.current_group_index = 0
         self._update_group_nav()
-        
+
+        # Sync Cal date to all date-type fields (so they match when form is first built)
+        if hasattr(self, "date_edit"):
+            self._sync_date_to_all_date_fields(self.date_edit.date())
+
         # Load and display template notes
         if self.template:
             template_notes = str(self.template.get("notes", "") or "")
@@ -3186,7 +3470,19 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             w = QtWidgets.QLineEdit()
             w.setPlaceholderText("Number")
         elif data_type == "bool":
-            w = QtWidgets.QCheckBox()
+            w = QtWidgets.QWidget()
+            layout = QtWidgets.QHBoxLayout(w)
+            layout.setContentsMargins(0, 0, 0, 0)
+            pass_btn = QtWidgets.QRadioButton("Pass")
+            pass_btn.setObjectName("pass_btn")
+            fail_btn = QtWidgets.QRadioButton("Fail")
+            fail_btn.setObjectName("fail_btn")
+            btn_group = QtWidgets.QButtonGroup(w)
+            btn_group.addButton(pass_btn)
+            btn_group.addButton(fail_btn)
+            layout.addWidget(pass_btn)
+            layout.addWidget(fail_btn)
+            fail_btn.setChecked(True)
         elif data_type == "date":
             w = QtWidgets.QDateEdit(calendarPopup=True)
             w.setDisplayFormat("yyyy-MM-dd")
@@ -3212,6 +3508,11 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             ref_val = f.get("default_value") or ""
             if ref_val:
                 w.setText(str(ref_val))
+        elif data_type == "tolerance":
+            w = QtWidgets.QLineEdit()
+            w.setReadOnly(True)
+            w.setPlaceholderText("—")
+            w.setText("—")
         else:  # text / default
             w = QtWidgets.QLineEdit()
 
@@ -3220,6 +3521,8 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             if isinstance(w, QtWidgets.QLineEdit):
                 w.setReadOnly(True)
             elif isinstance(w, QtWidgets.QCheckBox):
+                w.setEnabled(False)
+            elif isinstance(w, QtWidgets.QWidget) and w.findChild(QtWidgets.QRadioButton, "pass_btn"):
                 w.setEnabled(False)
             elif isinstance(w, QtWidgets.QDateEdit):
                 w.setReadOnly(True)
@@ -3315,6 +3618,10 @@ class CalibrationFormDialog(QtWidgets.QDialog):
                         value = prev_widget.text()
                     elif isinstance(prev_widget, QtWidgets.QCheckBox):
                         value = "1" if prev_widget.isChecked() else "0"
+                    elif isinstance(prev_widget, QtWidgets.QWidget):
+                        p = prev_widget.findChild(QtWidgets.QRadioButton, "pass_btn")
+                        if p is not None:
+                            value = "1" if p.isChecked() else "0"
                     elif isinstance(prev_widget, QtWidgets.QDateEdit):
                         value = prev_widget.date().toString("yyyy-MM-dd")
                     elif isinstance(prev_widget, QtWidgets.QComboBox):
@@ -3336,10 +3643,22 @@ class CalibrationFormDialog(QtWidgets.QDialog):
                         current_widget.repaint()
                     elif isinstance(current_widget, QtWidgets.QCheckBox):
                         current_widget.blockSignals(True)
-                        current_widget.setChecked(value == "1" or value.lower() == "true")
+                        current_widget.setChecked(value == "1" or (value and value.lower() == "true"))
                         current_widget.blockSignals(False)
                         current_widget.update()
                         current_widget.repaint()
+                    elif isinstance(current_widget, QtWidgets.QWidget):
+                        p = current_widget.findChild(QtWidgets.QRadioButton, "pass_btn")
+                        if p is not None:
+                            current_widget.blockSignals(True)
+                            is_pass = value == "1" or (value and str(value).lower() in ("true", "yes"))
+                            p.setChecked(is_pass)
+                            f = current_widget.findChild(QtWidgets.QRadioButton, "fail_btn")
+                            if f:
+                                f.setChecked(not is_pass)
+                            current_widget.blockSignals(False)
+                            current_widget.update()
+                            current_widget.repaint()
                     elif isinstance(current_widget, QtWidgets.QDateEdit):
                         current_widget.blockSignals(True)
                         try:
@@ -3479,11 +3798,7 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             self.performed_other_edit.setText(performed_by)
             self.performed_other_edit.setVisible(True)
 
-        res = rec.get("result") or "PASS"
-        idx = self.result_combo.findText(res)
-        if idx < 0:
-            idx = 0
-        self.result_combo.setCurrentIndex(idx)
+        # Result is stored on record but not shown in UI; derived from tolerance pass/fail on save
 
         # Load and display template notes (not per-instance notes)
         template_notes = str(self.template.get("notes", "") or "")
@@ -3499,6 +3814,7 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         # Fill field values
         vals = self.repo.get_calibration_values(self.record_id)
         by_field = {v["field_id"]: v for v in vals}
+        values_by_name = {v.get("field_name"): v.get("value_text") for v in vals}
         for f in self.fields:
             fid = f["id"]
             w = self.field_widgets.get(fid)
@@ -3510,7 +3826,12 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             val_text = v.get("value_text")
             dt = f["data_type"]
             if dt == "bool":
-                w.setChecked(val_text == "1" or val_text.lower() in ("true", "yes"))
+                pass_btn = w.findChild(QtWidgets.QRadioButton, "pass_btn") if hasattr(w, "findChild") else None
+                fail_btn = w.findChild(QtWidgets.QRadioButton, "fail_btn") if hasattr(w, "findChild") else None
+                if pass_btn and fail_btn:
+                    is_pass = val_text == "1" or (val_text and str(val_text).lower() in ("true", "yes"))
+                    pass_btn.setChecked(is_pass)
+                    fail_btn.setChecked(not is_pass)
             elif dt == "date":
                 try:
                     d = datetime.strptime(val_text, "%Y-%m-%d").date()
@@ -3526,6 +3847,52 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             else:
                 w.setText(val_text or "")
 
+        # For equation-tolerance fields, show "lhs op rhs, PASS/FAIL" in the template form
+        try:
+            from tolerance_service import equation_tolerance_display
+            for f in self.fields:
+                fid = f["id"]
+                w = self.field_widgets.get(fid)
+                if not w or not hasattr(w, "setText"):
+                    continue
+                v = by_field.get(fid)
+                if not v:
+                    continue
+                tol_type = (f.get("tolerance_type") or "").lower()
+                if tol_type != "equation" or not f.get("tolerance_equation"):
+                    continue
+                nominal = 0.0
+                nominal_str = f.get("nominal_value")
+                if nominal_str not in (None, ""):
+                    try:
+                        nominal = float(str(nominal_str).strip())
+                    except (TypeError, ValueError):
+                        pass
+                reading = 0.0
+                val_text = v.get("value_text")
+                if val_text not in (None, ""):
+                    try:
+                        reading = float(str(val_text).strip())
+                    except (TypeError, ValueError):
+                        pass
+                vars_map = {"nominal": nominal, "reading": reading}
+                for i in range(1, 6):
+                    ref_name = f.get(f"calc_ref{i}_name")
+                    if ref_name and ref_name in values_by_name:
+                        try:
+                            vars_map[f"ref{i}"] = float(values_by_name[ref_name] or 0)
+                        except (TypeError, ValueError):
+                            vars_map[f"ref{i}"] = 0.0
+                parts = equation_tolerance_display(f.get("tolerance_equation"), vars_map)
+                if parts is not None:
+                    lhs, op_str, rhs, pass_ = parts
+                    from tolerance_service import format_calculation_display
+                    w.setText(f"{format_calculation_display(lhs, sig_figs=3)} {op_str} {format_calculation_display(rhs, sig_figs=3)}, {'PASS' if pass_ else 'FAIL'}")
+        except ImportError:
+            pass
+        # One-time display for tolerance-type (data_type) fields from stored values
+        self._populate_tolerance_field_displays_from_values(values_by_name)
+
     def accept(self):
         if not self.template:
             super().reject()
@@ -3537,21 +3904,25 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             if self.performed_combo.currentText() == "Other..."
             else self.performed_combo.currentText().strip()
         )
-        result = self.result_combo.currentText()
         notes = ""  # Notes are permanent from template
 
         field_values = self._collect_field_values()
         if field_values is None:
             return
-        values_by_name = {f["name"]: field_values.get(f["id"]) for f in self.fields}
+        values_by_name = {}
+        for f in self.fields:
+            name = (f.get("name") or f.get("field_name") or "").strip()
+            if name:
+                values_by_name[name] = field_values.get(f["id"])
 
         self._apply_computations(field_values, values_by_name)
-        any_out_of_tol, result = self._check_tolerance_pass_fail(field_values, values_by_name, result)
-        if any_out_of_tol:
-            result = "FAIL"
-            idx = self.result_combo.findText("FAIL")
-            if idx >= 0:
-                self.result_combo.setCurrentIndex(idx)
+        # Rebuild values_by_name after computations (computed values now in field_values)
+        for f in self.fields:
+            name = (f.get("name") or f.get("field_name") or "").strip()
+            if name:
+                values_by_name[name] = field_values.get(f["id"])
+        any_out_of_tol, _ = self._check_tolerance_pass_fail(field_values, values_by_name, "PASS")
+        result = "FAIL" if any_out_of_tol else "PASS"
 
         ok_btn = self.btn_box.button(QtWidgets.QDialogButtonBox.Ok)
         if ok_btn:
@@ -3577,17 +3948,73 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             ok_btn.setText("Saved!")
         QtCore.QTimer.singleShot(400, self._finish_accept)
 
+    def _populate_tolerance_field_displays_from_values(self, values_by_name: dict):
+        """One-time: set read-only tolerance-type field widgets to 'lhs op rhs, PASS/FAIL' from values_by_name (e.g. from DB when editing)."""
+        try:
+            from tolerance_service import equation_tolerance_display, list_variables, format_calculation_display
+        except ImportError:
+            return
+        for f in self.fields:
+            if (f.get("data_type") or "") != "tolerance":
+                continue
+            fid = f["id"]
+            w = self.field_widgets.get(fid)
+            if not w or not hasattr(w, "setText"):
+                continue
+            eq = (f.get("tolerance_equation") or "").strip()
+            if not eq:
+                w.setText("—")
+                continue
+            nominal = 0.0
+            nominal_str = f.get("nominal_value")
+            if nominal_str not in (None, ""):
+                try:
+                    nominal = float(str(nominal_str).strip())
+                except (TypeError, ValueError):
+                    pass
+            vars_map = {"nominal": nominal, "reading": 0.0}
+            for i in range(1, 6):
+                ref_name = f.get(f"calc_ref{i}_name")
+                if ref_name and ref_name in values_by_name and values_by_name.get(ref_name) not in (None, ""):
+                    try:
+                        vars_map[f"ref{i}"] = float(str(values_by_name[ref_name]).strip())
+                    except (TypeError, ValueError):
+                        pass
+            if "reading" in list_variables(eq):
+                ref1 = f.get("calc_ref1_name")
+                if ref1 and ref1 in values_by_name and values_by_name.get(ref1) not in (None, ""):
+                    try:
+                        vars_map["reading"] = float(str(values_by_name[ref1]).strip())
+                    except (TypeError, ValueError):
+                        pass
+            required_vars = list_variables(eq)
+            if any(var not in vars_map for var in required_vars):
+                w.setText("—")
+                continue
+            try:
+                parts = equation_tolerance_display(eq, vars_map)
+                if parts is not None:
+                    lhs, op_str, rhs, pass_ = parts
+                    w.setText(f"{format_calculation_display(lhs, sig_figs=3)} {op_str} {format_calculation_display(rhs, sig_figs=3)}, {'PASS' if pass_ else 'FAIL'}")
+                else:
+                    w.setText("—")
+            except (ValueError, TypeError):
+                w.setText("—")
+
     def _collect_field_values(self) -> dict[int, str] | None:
-        """Collect user-entered values from widgets. Returns None if validation fails."""
+        """Collect user-entered values from widgets. Returns None if validation fails. Skips tolerance-type (read-only) fields."""
         field_values: dict[int, str] = {}
         for f in self.fields:
             fid = f["id"]
             dt = f["data_type"]
+            if dt == "tolerance":
+                continue
             w = self.field_widgets[fid]
             val = None
 
             if dt == "bool":
-                val = "1" if w.isChecked() else "0"
+                pass_btn = w.findChild(QtWidgets.QRadioButton, "pass_btn") if hasattr(w, "findChild") else None
+                val = "1" if (pass_btn and pass_btn.isChecked()) else "0"
             elif dt == "date":
                 val = w.date().toString("yyyy-MM-dd")
             elif dt == "signature":
@@ -3728,9 +4155,16 @@ class CalibrationFormDialog(QtWidgets.QDialog):
                 result_val = ""
                 if eq:
                     try:
-                        from tolerance_service import evaluate_tolerance_equation
-                        val = evaluate_tolerance_equation(eq, vars_map)
-                        result_val = "Pass" if val >= 0.5 else "Fail"
+                        from tolerance_service import equation_tolerance_display
+                        parts = equation_tolerance_display(eq, vars_map)
+                        if parts is not None:
+                            lhs, op_str, rhs, pass_ = parts
+                            from tolerance_service import format_calculation_display
+                            result_val = f"{format_calculation_display(lhs, sig_figs=3)} {op_str} {format_calculation_display(rhs, sig_figs=3)}, {'PASS' if pass_ else 'FAIL'}"
+                        else:
+                            from tolerance_service import evaluate_tolerance_equation
+                            val = evaluate_tolerance_equation(eq, vars_map)
+                            result_val = "Pass" if val >= 0.5 else "Fail"
                     except Exception:
                         result_val = "Fail"
                 field_values[fid] = result_val
@@ -3750,7 +4184,7 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         except ImportError:
             evaluate_pass_fail = None
         for f in self.fields:
-            if f.get("calc_type") not in ("ABS_DIFF", "PCT_DIFF", "MIN_OF", "MAX_OF", "RANGE_OF"):
+            if f.get("calc_type") not in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF", "MIN_OF", "MAX_OF", "RANGE_OF"):
                 continue
 
             tol_raw = f.get("tolerance")
@@ -3868,7 +4302,62 @@ class CalibrationFormDialog(QtWidgets.QDialog):
                     any_out_of_tol = True
                     break
 
-        return (any_out_of_tol, result)
+        # Fifth pass: other fields with tolerance (number, reference, etc. — equation, fixed, percent, lookup)
+        if not any_out_of_tol and evaluate_pass_fail:
+            for f in self.fields:
+                if f.get("calc_type") or (f.get("data_type") or "") == "bool" or (f.get("data_type") or "") == "tolerance":
+                    continue
+                tol_type = (f.get("tolerance_type") or "fixed").lower()
+                if not f.get("tolerance_equation") and f.get("tolerance") is None and tol_type not in ("equation", "percent", "lookup"):
+                    continue
+                fid = f["id"]
+                val_txt = field_values.get(fid)
+                if val_txt is None or val_txt == "":
+                    continue
+                try:
+                    reading = float(str(val_txt).strip())
+                except (TypeError, ValueError):
+                    continue
+                nominal = 0.0
+                nominal_str = f.get("nominal_value")
+                if nominal_str not in (None, ""):
+                    try:
+                        nominal = float(str(nominal_str).strip())
+                    except (TypeError, ValueError):
+                        pass
+                vars_map = {"nominal": nominal, "reading": reading}
+                for i, r in enumerate((f.get("calc_ref1_name"), f.get("calc_ref2_name"), f.get("calc_ref3_name"), f.get("calc_ref4_name"), f.get("calc_ref5_name")), 1):
+                    if r and r in values_by_name:
+                        try:
+                            vars_map[f"ref{i}"] = float(values_by_name[r] or 0)
+                        except (TypeError, ValueError):
+                            pass
+                tol_fixed = None
+                tol_raw = f.get("tolerance")
+                if tol_raw not in (None, ""):
+                    try:
+                        tol_fixed = float(str(tol_raw))
+                    except (TypeError, ValueError):
+                        pass
+                try:
+                    pass_, _, _ = evaluate_pass_fail(
+                        tol_type,
+                        tol_fixed,
+                        f.get("tolerance_equation"),
+                        nominal,
+                        reading,
+                        vars_map=vars_map,
+                        tolerance_lookup_json=f.get("tolerance_lookup_json"),
+                    )
+                    if not pass_:
+                        any_out_of_tol = True
+                        break
+                except Exception:
+                    any_out_of_tol = True
+                    break
+
+        derived_result = "FAIL" if any_out_of_tol else "PASS"
+        return (any_out_of_tol, derived_result)
 
     def _save_calibration_record(
         self,

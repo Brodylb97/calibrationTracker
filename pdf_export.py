@@ -105,20 +105,56 @@ def _make_signature_flowable(filename: str | None, max_h: float = 0.35 * inch, m
     return img
 
 
-def _format_value_for_pdf(v: dict) -> str:
+def _format_value_for_pdf(v: dict, values_by_name: dict | None = None) -> str:
     """
-    Return display text for a field value in PDF. For bool fields, show Pass/Fail
-    when bool tolerance is used; otherwise Yes/No. Other types return value_text as-is.
+    Return display text for a field value in PDF.
+    For equation tolerance (single comparison): "lhs op rhs, Pass" or ", Fail".
+    For bool fields: Pass/Fail when bool tolerance; otherwise Yes/No.
+    Other types: value_text as-is.
     """
     data_type = (v.get("data_type") or "").lower()
     val_text = (v.get("value_text") or "").strip()
+    tol_type = (v.get("tolerance_type") or "").lower()
+    values_by_name = values_by_name or {}
+
+    # Equation tolerance (comparison): show "calculated op compared, Pass/Fail"
+    if tol_type == "equation" and v.get("tolerance_equation"):
+        try:
+            from tolerance_service import equation_tolerance_display
+            nominal = 0.0
+            nominal_str = v.get("nominal_value")
+            if nominal_str not in (None, ""):
+                try:
+                    nominal = float(str(nominal_str).strip())
+                except (TypeError, ValueError):
+                    pass
+            reading = 0.0
+            if val_text:
+                try:
+                    reading = float(str(val_text).strip())
+                except (TypeError, ValueError):
+                    pass
+            vars_map = {"nominal": nominal, "reading": reading}
+            for i in range(1, 6):
+                ref_name = v.get(f"calc_ref{i}_name")
+                if ref_name and ref_name in values_by_name:
+                    try:
+                        vars_map[f"ref{i}"] = float(values_by_name[ref_name] or 0)
+                    except (TypeError, ValueError):
+                        vars_map[f"ref{i}"] = 0.0
+            parts = equation_tolerance_display(v.get("tolerance_equation"), vars_map)
+            if parts is not None:
+                from tolerance_service import format_calculation_display
+                lhs, op_str, rhs, pass_ = parts
+                return f"{format_calculation_display(lhs, sig_figs=3)} {op_str} {format_calculation_display(rhs, sig_figs=3)}, {'Pass' if pass_ else 'Fail'}"
+        except Exception:
+            pass
 
     if data_type != "bool":
         return val_text or "—"
 
     # Bool: display Pass/Fail or Yes/No instead of 1/0
     reading_bool = val_text in ("1", "true", "yes", "on")
-    tol_type = (v.get("tolerance_type") or "").lower()
     if tol_type == "bool":
         pass_when = (v.get("tolerance_equation") or "true").strip().lower()
         if pass_when not in ("true", "false"):
@@ -239,6 +275,7 @@ def export_calibration_to_pdf(repo, rec_id: int, output_path: str | Path) -> Non
 
     # One table per group: clearly delineated column headers (bold, bordered), all cells centered
     groups = _group_values_by_group(values)
+    values_by_name = {v.get("field_name"): v.get("value_text") for v in values}
     pad = 3
 
     for group_name, group_values in groups.items():
@@ -274,7 +311,7 @@ def export_calibration_to_pdf(repo, rec_id: int, output_path: str | Path) -> Non
                 sig_flowable = _make_signature_flowable(v.get("value_text"))
                 data_cells.append(sig_flowable if sig_flowable else Paragraph("—", table_cell_style))
             else:
-                val_text = _format_value_for_pdf(v)
+                val_text = _format_value_for_pdf(v, values_by_name)
                 if not val_text:
                     val_text = "—"
                 val_text = val_text.replace("\n", " ")

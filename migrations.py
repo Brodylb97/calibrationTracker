@@ -270,6 +270,65 @@ def migrate_6_add_reference_type(conn: sqlite3.Connection) -> None:
     logger.info("Migration 6 applied: added 'reference' to calibration_template_fields.data_type")
 
 
+def migrate_7_add_tolerance_type(conn: sqlite3.Connection) -> None:
+    """Add 'tolerance' to calibration_template_fields.data_type CHECK (read-only display field)."""
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(calibration_template_fields)")
+    old_cols = [r[1] for r in cur.fetchall()]
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        cur.execute(
+            """
+            CREATE TABLE calibration_template_fields_new (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id     INTEGER NOT NULL REFERENCES calibration_templates(id) ON DELETE CASCADE,
+                name            TEXT NOT NULL,
+                label           TEXT NOT NULL,
+                data_type       TEXT NOT NULL CHECK (data_type IN ('text', 'number', 'bool', 'date', 'signature', 'reference', 'tolerance')),
+                unit            TEXT,
+                required        INTEGER NOT NULL DEFAULT 0,
+                sort_order      INTEGER NOT NULL DEFAULT 0,
+                group_name      TEXT,
+                calc_type       TEXT,
+                calc_ref1_name  TEXT,
+                calc_ref2_name  TEXT,
+                calc_ref3_name  TEXT,
+                calc_ref4_name  TEXT,
+                calc_ref5_name  TEXT,
+                tolerance       REAL,
+                autofill_from_first_group INTEGER NOT NULL DEFAULT 0,
+                default_value   TEXT,
+                tolerance_type  TEXT,
+                tolerance_equation TEXT,
+                nominal_value   TEXT,
+                tolerance_lookup_json TEXT
+            )
+            """
+        )
+        sel_cols = [c for c in old_cols if c in (
+            "id", "template_id", "name", "label", "data_type", "unit", "required", "sort_order",
+            "group_name", "calc_type", "calc_ref1_name", "calc_ref2_name", "calc_ref3_name",
+            "calc_ref4_name", "calc_ref5_name", "tolerance", "autofill_from_first_group",
+            "default_value", "tolerance_type", "tolerance_equation", "nominal_value", "tolerance_lookup_json"
+        )]
+        sel_list = ", ".join(sel_cols)
+        ins_list = ", ".join(sel_cols)
+        cur.execute(
+            f"INSERT INTO calibration_template_fields_new ({ins_list}) SELECT {sel_list} FROM calibration_template_fields"
+        )
+        cur.execute("DROP TABLE calibration_template_fields")
+        cur.execute("ALTER TABLE calibration_template_fields_new RENAME TO calibration_template_fields")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_template_id ON calibration_template_fields(template_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_sort_order ON calibration_template_fields(template_id, sort_order)")
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    logger.info("Migration 7 applied: added 'tolerance' to calibration_template_fields.data_type")
+
+
 def _migration_lock_path(db_path) -> "Path | None":
     """Path to advisory lock file next to the database."""
     if db_path is None:
@@ -334,3 +393,7 @@ def _run_migrations_impl(conn: sqlite3.Connection) -> None:
     if version < 6:
         migrate_6_add_reference_type(conn)
         set_schema_version(conn, 6)
+        version = 6
+    if version < 7:
+        migrate_7_add_tolerance_type(conn)
+        set_schema_version(conn, 7)
