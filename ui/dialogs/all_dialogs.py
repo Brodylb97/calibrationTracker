@@ -4356,6 +4356,72 @@ class CalibrationFormDialog(QtWidgets.QDialog):
                     any_out_of_tol = True
                     break
 
+        # Sixth pass: tolerance-type (data_type "tolerance") fields — not in field_values; evaluate from values_by_name
+        if not any_out_of_tol and evaluate_pass_fail:
+            for f in self.fields:
+                if (f.get("data_type") or "").strip().lower() != "tolerance":
+                    continue
+                eq = (f.get("tolerance_equation") or "").strip()
+                if not eq:
+                    continue
+                nominal = 0.0
+                nominal_str = f.get("nominal_value")
+                if nominal_str not in (None, ""):
+                    try:
+                        nominal = float(str(nominal_str).strip())
+                    except (TypeError, ValueError):
+                        pass
+                vars_map = {"nominal": nominal, "reading": 0.0}
+                for i in range(1, 6):
+                    ref_name = f.get(f"calc_ref{i}_name")
+                    if ref_name and ref_name in values_by_name:
+                        v = values_by_name.get(ref_name)
+                        if v not in (None, ""):
+                            try:
+                                vars_map[f"ref{i}"] = float(str(v).strip())
+                            except (TypeError, ValueError):
+                                pass
+                try:
+                    from tolerance_service import list_variables
+                    if "reading" in list_variables(eq):
+                        ref1 = f.get("calc_ref1_name")
+                        if ref1 and ref1 in values_by_name:
+                            v = values_by_name.get(ref1)
+                            if v not in (None, ""):
+                                try:
+                                    vars_map["reading"] = float(str(v).strip())
+                                except (TypeError, ValueError):
+                                    pass
+                except ImportError:
+                    pass
+                for i in range(1, 6):
+                    rk, vk = f"ref{i}", f"val{i}"
+                    if rk in vars_map and vk not in vars_map:
+                        vars_map[vk] = vars_map[rk]
+                try:
+                    from tolerance_service import list_variables, equation_tolerance_display
+                    required = list_variables(eq)
+                    if any(var not in vars_map for var in required):
+                        continue
+                    parts = equation_tolerance_display(eq, vars_map)
+                    if parts is not None:
+                        _, _, _, pass_ = parts
+                        if not pass_:
+                            any_out_of_tol = True
+                            break
+                    else:
+                        reading = vars_map.get("reading", 0.0)
+                        pass_, _, _ = evaluate_pass_fail(
+                            "equation", None, eq, nominal, reading,
+                            vars_map=vars_map, tolerance_lookup_json=None,
+                        )
+                        if not pass_:
+                            any_out_of_tol = True
+                            break
+                except Exception:
+                    any_out_of_tol = True
+                    break
+
         derived_result = "FAIL" if any_out_of_tol else "PASS"
         return (any_out_of_tol, derived_result)
 
