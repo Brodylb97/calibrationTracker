@@ -106,6 +106,7 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
         ),
         "DestinationEditDialog": (
             "Destination Dialog",
+            "Destination Dialog",
             """
             <h3>Calibration Destination</h3>
             <p>Add or edit a calibration destination (service provider or internal department).</p>
@@ -176,36 +177,45 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
             
             <h4>Field Configuration:</h4>
             <ul>
-                <li><b>Type</b>: Data type (text, number, bool/checkbox, date, signature, reference)</li>
-                <li><b>Unit</b>: Unit of measurement — shown only when Type is number (e.g., "°C", "psi", "V")</li>
-                <li><b>Reference value</b>: Shown only when Type is reference; the reference/nominal value for this point</li>
-                <li><b>Required</b>: Check if field must be filled during calibration</li>
+                <li><b>Type</b>: Data type — text, number, bool, date, signature, reference, tolerance, convert, stat, plot, field header</li>
+                <li><b>Unit</b>: Unit of measurement (number, convert, tolerance, reference, stat)</li>
+                <li><b>Reference value</b>: Shown when Type is reference; the reference/nominal value for this point</li>
+                <li><b>Required</b>: Check if field must be filled (not used for tolerance, convert, or stat)</li>
                 <li><b>Sort order</b>: Order in which fields appear (lower numbers first)</li>
-                <li><b>Group</b>: Group name (fields with same group appear together on separate pages). When entering equations, val1–val5 field choices are filtered by this group.</li>
+                <li><b>Group</b>: Group name (fields with same group appear together). For tolerance/convert equations, val1–val12 field choices can be filtered by this group.</li>
+                <li><b>Numbers after decimal</b>: 0–4 decimal places for displayed values (number, convert, tolerance, reference, stat)</li>
             </ul>
             
-            <h4>Tolerance type:</h4>
+            <h4>Field types:</h4>
+            <ul>
+                <li><b>Tolerance</b>: Read-only field that shows a pass/fail result from an equation (must contain &lt;, &gt;, &lt;=, &gt;=, or ==)</li>
+                <li><b>Convert</b>: Read-only field that shows a computed value from an expression (e.g. unit conversion)</li>
+                <li><b>Stat</b>: Read-only field that shows a statistical result. Stat has access to <b>all template fields</b> for val1–val12; no group filter.</li>
+                <li><b>Plot</b>: Scatter chart in PDF export. Use <code>PLOT([x1, x2, ...], [y1, y2, ...])</code>. Each point is (x1,y1), (x2,y2), etc. When X and Y are <b>side by side</b> in the table (e.g. Certified Weight then Balance Response), set ref1=X1, ref2=Y1, ref3=X2, ref4=Y2, … and use <code>PLOT([val1, val3, val5, ...], [val2, val4, val6, ...])</code>.</li>
+                <li><b>Field Header</b>: Display-only. Shows the field's label as a header for the group it is assigned to (in the calibration form and in PDF export). No value is stored.</li>
+            </ul>
+            
+            <h4>Tolerance type (for number/bool with tolerance):</h4>
             <ul>
                 <li><b>None</b>: No pass/fail tolerance</li>
-                <li><b>Equation</b>: Pass/fail from a formula. The equation must contain a comparison (<, >, <=, >=, or ==). Use val1–val5 to reference other fields.</li>
+                <li><b>Equation</b>: Pass/fail from a formula (must contain a comparison). Use val1–val12 to reference other fields.</li>
                 <li><b>Boolean</b>: Pass when the value is True or False (for checkbox fields)</li>
             </ul>
             
-            <h4>Tolerance equation — variables:</h4>
-            <p>When <b>Tolerance type</b> is <b>Equation</b>:</p>
+            <h4>Equation variables (val1–val12):</h4>
+            <p>For <b>Tolerance type = Equation</b>, <b>Convert</b>, and <b>Stat</b>:</p>
             <ul>
                 <li><b>Operators</b>: + − * / ^ (power), <code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code> <code>==</code></li>
-                <li><b>Functions</b>: <code>ABS()</code>, <code>MIN()</code>, <code>MAX()</code>, <code>ROUND()</code>, <code>AVERAGE()</code></li>
-                <li><b>nominal</b>: Expected value (from reference field or context)</li>
+                <li><b>Functions</b>: <code>ABS()</code>, <code>MIN()</code>, <code>MAX()</code>, <code>ROUND()</code>, <code>AVERAGE()</code>, <code>LINEST(ys, xs)</code> (slope), <code>INTERCEPT(ys, xs)</code>, <code>RSQ(ys, xs)</code> (R²), <code>CORREL(ys, xs)</code>, <code>STDEV([vals])</code>, <code>STDEVP([vals])</code>, <code>MEDIAN([vals])</code></li>
+                <li><b>nominal</b>: Expected value (from reference or context)</li>
                 <li><b>reading</b>: Measured or computed value for this point</li>
-                <li><b>val1, val2, val3, val4, val5</b>: Values from the fields chosen as val1–val5 (filtered by Group when set)</li>
+                <li><b>val1 … val12</b>: Values from the fields you assign to val1–val12. Use the dropdowns to pick which field each val refers to. For <b>stat</b> type, all template fields are available; for tolerance/convert, options can be limited by Group.</li>
             </ul>
-            <p>Example: <code>reading &lt;= 0.02 * nominal</code>. Example with val1/val2: <code>val1 &lt; val2 + 0.5</code>.</p>
+            <p>Examples: <code>reading &lt;= 0.02 * nominal</code>; <code>val1 &lt; val2 + 0.5</code>; <code>LINEST([val1, val2, val3], [1, 2, 3])</code>; <code>STDEV([val1, val2, val3])</code>; <code>MEDIAN([val1, val2, val3, val4])</code>. Use <b>+ Add value</b> to show val6–val12 rows.</p>
             
             <h4>Autofill Feature:</h4>
             <ul>
-                <li><b>Autofill from previous group</b>: If checked, this field will automatically fill matching fields in the next group when you navigate forward</li>
-                <li>Fields match by name or label</li>
+                <li><b>Autofill from previous group</b>: If checked, this field will automatically fill matching fields in the next group when you navigate forward. Fields match by name or label.</li>
             </ul>
             """
         ),
@@ -222,31 +232,25 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
                 <li><b>Delete</b>: Remove the selected field (select one or more rows for batch delete)</li>
                 <li><b>Duplicate group</b>: Copy all fields from one group to create a new group</li>
                 <li><b>Batch change equation</b>: Set the same tolerance equation for all selected fields</li>
+                <li><b>Batch apply unit</b>: Set unit for selected fields</li>
+                <li><b>Batch set decimal</b>: Set numbers after decimal (0–4) for selected number, convert, reference, tolerance, and stat fields</li>
+                <li><b>Batch set group</b>: Set group name for selected fields</li>
                 <li><b>Explain tolerance</b>: Open help that explains how the selected field's tolerance is evaluated</li>
             </ul>
             
             <h4>Table Columns (click headers to sort):</h4>
             <ul>
-                <li><b>Name</b>: Internal field name</li>
-                <li><b>Label</b>: Display label</li>
-                <li><b>Type</b>: Data type</li>
-                <li><b>Unit</b>: Unit of measurement</li>
-                <li><b>Required</b>: Whether field is required</li>
-                <li><b>Sort</b>: Sort order (default sort column)</li>
-                <li><b>Group</b>: Group name</li>
-                <li><b>Calc</b>: Calculation type if applicable</li>
-                <li><b>Tolerance</b>: Tolerance value or equation summary</li>
+                <li><b>Name</b>, <b>Label</b>, <b>Type</b>, <b>Unit</b>, <b>Required</b>, <b>Sort</b>, <b>Group</b>, <b>Calc</b>, <b>Tolerance</b></li>
             </ul>
             
-            <h4>Tolerance equation variables:</h4>
-            <p>For fields with <b>Tolerance type = Equation</b>, the formula uses nominal, reading, and val1–val5. See the Field Edit Help for full details.</p>
+            <h4>Field types and equations:</h4>
+            <p><b>Tolerance</b>, <b>Convert</b>, and <b>Stat</b> types use equations with variables nominal, reading, and val1–val12. Stat type has access to <b>all template fields</b> for value selection. See Field Edit Help for equation syntax and LINEST, STDEV, MEDIAN, etc.</p>
             
             <h4>Tips:</h4>
             <ul>
                 <li>Organize related fields into groups</li>
                 <li>Use consistent naming for fields that should autofill</li>
-                <li>Set appropriate sort orders to control field display sequence</li>
-                <li>Use Batch change equation to apply the same formula to many fields quickly</li>
+                <li>Use Batch set group, unit, or decimal to update many fields at once</li>
             </ul>
             """
         ),
@@ -269,13 +273,22 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
                 <li>Shows all field values from the calibration</li>
             </ul>
             
+            <h4>Table Columns:</h4>
+            <ul>
+                <li><b>Date</b>: Calibration date</li>
+                <li><b>Template</b>: Template used for the calibration</li>
+                <li><b>Performed by</b>: Person who performed the calibration</li>
+                <li><b>Result</b>: Overall result (PASS, FAIL, CONDITIONAL)</li>
+                <li><b>State</b>: Record state (Draft, Approved, Archived)</li>
+            </ul>
+            
             <h4>Actions:</h4>
             <ul>
                 <li><b>➕ New Calibration</b>: Create a new calibration record</li>
-                <li><b>👁️ View/Edit</b>: View or edit the selected calibration</li>
+                <li><b>✏️ View/Edit</b>: View or edit the selected calibration</li>
                 <li><b>📄 Export PDF</b>: Export the selected calibration to PDF</li>
                 <li><b>📎 Open File</b>: Open attached calibration file (if any)</li>
-                <li><b>🗑️ Delete</b>: Delete the selected calibration record</li>
+                <li><b>🗑️ Delete</b>: Delete the selected calibration record (Archive or Delete permanently)</li>
             </ul>
             
             <h4>Tips:</h4>
@@ -294,18 +307,11 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
             
             <h4>Actions:</h4>
             <ul>
-                <li><b>New</b>: Create a new calibration template</li>
+                <li><b>Add</b>: Create a new calibration template</li>
                 <li><b>Edit</b>: Modify the selected template</li>
+                <li><b>Clone</b>: Copy a template to create a new one</li>
                 <li><b>Delete</b>: Remove the selected template (only if no calibrations use it)</li>
-                <li><b>Fields</b>: Manage fields for the selected template</li>
-            </ul>
-            
-            <h4>Table Columns:</h4>
-            <ul>
-                <li><b>Name</b>: Template name</li>
-                <li><b>Version</b>: Version number</li>
-                <li><b>Active</b>: Whether template is available for use</li>
-                <li><b>Notes</b>: Template notes</li>
+                <li><b>Fields...</b>: Manage fields for the selected template</li>
             </ul>
             
             <h4>Tips:</h4>
@@ -313,6 +319,7 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
                 <li>Create templates for common calibration procedures</li>
                 <li>Only active templates appear when creating calibrations</li>
                 <li>Use the Fields button to configure what data is collected</li>
+                <li>Use Clone to quickly create a template based on an existing one</li>
             </ul>
             """
         ),
@@ -332,9 +339,10 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
             <h4>Filling Out Fields:</h4>
             <ul>
                 <li><b>Text/Number fields</b>: Type values directly</li>
-                <li><b>Checkboxes</b>: Click to check/uncheck</li>
+                <li><b>Checkboxes</b>: Click to check/uncheck (Pass/Fail for bool tolerance)</li>
                 <li><b>Date fields</b>: Click the calendar icon to select a date</li>
-                <li><b>Computed fields</b>: Automatically calculated (read-only, shown in gray)</li>
+                <li><b>Signature fields</b>: Select a signature from the dropdown</li>
+                <li><b>Computed fields</b>: Tolerance, convert, and stat fields are automatically calculated (read-only)</li>
             </ul>
             
             <h4>Autofill Feature:</h4>

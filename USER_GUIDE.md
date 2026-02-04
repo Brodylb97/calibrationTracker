@@ -74,20 +74,29 @@ The **Calibration Tracker** is a comprehensive application designed to help you 
 The main window consists of several key areas:
 
 #### 1. Menu Bar and Toolbar
-- **Help → Theme**: Choose a color theme (Fusion, Taylor's Theme, Tess's Theme, Retina Seering, Vice). The selected theme is remembered for next time.
-- **Help → Text Size**: Choose Small (8pt), Medium (9pt), Large (10pt), or Extra Large (11pt). The selected size is remembered for next time.
+- **View → Theme**: Choose a color theme (Fusion, Taylor's Theme, Tess's Theme, Retina Seering, Vice). The selected theme is remembered for next time.
+- **View → Text Size**: Choose Small (8pt), Medium (9pt), Large (10pt), or Extra Large (11pt). The selected size is remembered for next time.
 - **Help → Check for Updates**: Manually check for a newer version. If you're current, a message says so; if an update is available, you can choose to update now or later. The application also checks automatically on startup but only shows a window when an update is available or when the check fails.
 - **Toolbar** (quick access): **New**, **Edit**, **Mark Calibrated**, **History**, **Settings**
 
-#### 2. Filter Bar
-Below the toolbar, allows you to filter instruments:
-- **Search Box**: Search by ID, location, destination, or instrument type
+#### 2. Needs Attention Panel
+Quick-filter buttons to focus on instruments requiring attention:
+- **Overdue**: Instruments past their calibration due date
+- **Due soon**: Instruments due within 30 days
+- **Recently modified**: Instruments modified in the last 7 days
+- **Last cal failed**: Instruments whose most recent calibration overall result was Fail
+- **Clear**: Reset Needs Attention filters
+
+#### 3. Filter Bar
+Below the Needs Attention panel, allows you to filter instruments:
+- **Search Box**: Search by ID, location, destination, or instrument type (press `Ctrl+F` to focus)
 - **Status Filter**: Filter by instrument status (ACTIVE, RETIRED, OUT_FOR_CAL)
 - **Type Filter**: Filter by instrument type
 - **Due Filter**: Filter by calibration due date (All, Overdue, Due in 30 days)
+- **Show archived**: Include soft-deleted (archived) instruments in the list
 - **Clear Button**: Reset all filters
 
-#### 3. Instrument Table
+#### 4. Instrument Table
 The main table displays all instruments with columns:
 - **ID**: Instrument tag number or identifier
 - **Location**: Current location of the instrument
@@ -98,22 +107,24 @@ The main table displays all instruments with columns:
 - **Days Left**: Number of days until calibration is due (negative = overdue)
 - **Status**: Current instrument status
 - **Instrument Type**: Type of instrument (e.g., "Thermometer")
+- **Flag**: Shows "⚠ Fail" (in bright green) when the most recent calibration overall result was Fail
 
 **Table Features**:
 - **Resizable Columns**: Drag column borders to adjust widths
 - **Persistent Widths**: Column widths are automatically saved and restored when you restart the application
 - **Sortable**: Click any column header to sort; click again to reverse sort order
 
-#### 4. Statistics Dashboard
+#### 5. Statistics Dashboard
 Located above the table, displays real-time statistics:
-- **Total Instruments**: Total number of instruments in the database
+- **Total**: Total number of instruments in the database
 - **Active**: Number of active instruments
 - **Overdue**: Number of instruments past their due date
-- **Due in 30 Days**: Number of instruments due within the next 30 days
+- **Due in 30 days**: Number of instruments due within the next 30 days
+- **Last cal failed**: Number of instruments whose most recent calibration overall result was Fail (shown in bright green)
 
 These statistics update automatically as you filter, add, or modify instruments.
 
-#### 5. Status Bar
+#### 6. Status Bar
 At the bottom, shows:
 - Information about the selected instrument (tag, location, next due date)
 - "Ready" message when no instrument is selected
@@ -128,6 +139,7 @@ The window title dynamically shows:
 
 The table uses color coding to highlight important information:
 
+- **Bright green background/text**: Instruments whose most recent calibration failed (overall result was Fail)
 - **Red background/text**: Instruments that are overdue (past due date)
 - **Yellow background**: Instruments due within 7 days
 - **Orange background**: Instruments due within 30 days
@@ -194,9 +206,10 @@ Right-click on any instrument in the table to access:
 
 1. Select an instrument in the table
 2. Right-click and choose **Delete** (or press `Delete` key)
-3. Confirm the deletion in the warning dialog
-
-**Warning**: Deleting an instrument cannot be undone. All associated calibration records will also be deleted.
+3. In the warning dialog, choose:
+   - **Archive**: Soft-delete the instrument (recommended). It will be hidden from the main list unless "Show archived" is checked. Calibration records are preserved.
+   - **Delete permanently**: Permanently remove the instrument and all associated calibration records (cannot be undone)
+   - **Cancel**: Abort the operation
 
 ### Instrument Status
 
@@ -327,21 +340,39 @@ When creating or editing a field, you can configure:
 
 - **Name** (Required): Internal field name (used for matching in autofill)
 - **Label** (Required): Display label shown on the form
-- **Type**: Data type (text, number, bool/checkbox, date, signature)
+- **Type**: Data type
   - **text**: Text or number input
   - **number**: Numeric input
   - **bool**: Checkbox (yes/no)
   - **date**: Date picker
   - **signature**: Signature selection dropdown (see Signature Fields below)
-- **Signature**: When type is "signature", select the default signature from the dropdown (optional)
+  - **reference**: Read-only reference/nominal value (from default_value)
+  - **tolerance**: Read-only pass/fail from an equation (must contain &lt;, &gt;, &lt;=, &gt;=, or ==)
+  - **convert**: Read-only computed value from an expression (e.g., unit conversion)
+  - **stat**: Read-only statistical result (e.g., LINEST, STDEV, MEDIAN — see Statistical Functions below)
+  - **plot**: Scatter chart in PDF export (PLOT([x1,x2,...], [y1,y2,...]))
+  - **field header**: Display-only header for a group
 - **Unit**: Unit of measurement (e.g., "°C", "psi", "V")
-- **Required**: Whether the field must be filled
+- **Required**: Whether the field must be filled (not used for tolerance, convert, stat)
 - **Sort order**: Order in which fields appear
 - **Group**: Group name (fields with the same group appear together)
-- **Calculation** (Optional): For computed fields:
-  - **ABS_DIFF**: Absolute difference between two fields
-  - **PCT_ERROR**: Percentage error calculation
 - **Autofill from previous group**: If checked, this field will automatically fill matching fields in the next group when you click "Next group"
+
+### Statistical Functions (Stat Type)
+
+Stat-type fields use equations with variables val1–val12. Available functions:
+
+| Function | Arguments | Description |
+|----------|-----------|-------------|
+| LINEST(ys, xs) | Two lists | Slope of least-squares regression line |
+| INTERCEPT(ys, xs) | Two lists | Y-intercept of regression line |
+| RSQ(ys, xs) | Two lists | R-squared (coefficient of determination) |
+| CORREL(ys, xs) | Two lists | Pearson correlation coefficient |
+| STDEV([vals]) | One list | Sample standard deviation |
+| STDEVP([vals]) | One list | Population standard deviation |
+| MEDIAN([vals]) | One list | Median of values |
+
+**Examples**: `LINEST([val1, val2, val3], [ref1, ref2, ref3])` for slope; `STDEV([val1, val2, val3])` for sample stdev; `MEDIAN([val1, val2, val3, val4])` for median.
 
 ### Signature Fields
 
@@ -529,8 +560,8 @@ If none are set, the app uses the built-in default path. The last-used database 
 
 ### Themes and Text Size
 
-- **Help → Theme**: Choose a color theme. Options include Fusion (default dark), Taylor's Theme, Tess's Theme, Retina Seering (bright, minimal), and Vice (cyan/pink/mint on dark). Your choice is saved and used the next time you start the app.
-- **Help → Text Size**: Choose Small (8pt), Medium (9pt), Large (10pt), or Extra Large (11pt). Your choice is saved and used the next time you start the app.
+- **View → Theme**: Choose a color theme. Options include Fusion (default dark), Taylor's Theme, Tess's Theme, Retina Seering (bright, minimal), and Vice (cyan/pink/mint on dark). Your choice is saved and used the next time you start the app.
+- **View → Text Size**: Choose Small (8pt), Medium (9pt), Large (10pt), or Extra Large (11pt). Your choice is saved and used the next time you start the app.
 
 ### Checking for Updates
 
@@ -806,9 +837,17 @@ The following features have been added in recent versions:
 - **Visual Search Feedback**: Search terms are highlighted in matching table cells
 - **Clear Button**: Easy-to-access clear button for search box
 
+#### Needs Attention and Failure Flag
+- **Needs Attention panel**: Quick-filter buttons for Overdue, Due soon, Recently modified, Last cal failed
+- **Last cal failed**: Counts instruments whose most recent calibration overall result was Fail; click to filter
+- **Flag column**: Shows "⚠ Fail" (bright green) for instruments with failed last calibration
+
 #### Themes and Text Size
-- **Help → Theme**: Multiple color themes (Fusion, Taylor's Theme, Tess's Theme, Retina Seering, Vice); selection is saved
-- **Help → Text Size**: Small, Medium, Large, Extra Large; selection is saved
+- **View → Theme**: Multiple color themes (Fusion, Taylor's Theme, Tess's Theme, Retina Seering, Vice); selection is saved
+- **View → Text Size**: Small, Medium, Large, Extra Large; selection is saved
+
+#### Statistical Functions
+- **Stat type fields**: LINEST (slope), INTERCEPT, RSQ, CORREL, STDEV, STDEVP, MEDIAN
 
 #### Updates and Backups
 - **Help → Check for Updates**: Manual check shows "You're already on the latest version" or offers an update; startup check only prompts when an update is available or when the check fails. Updates deliver the new executable so you get new UI and features.
@@ -819,5 +858,5 @@ The following features have been added in recent versions:
 
 ---
 
-*Last Updated: January 2025*
+*Last Updated: February 2025*
 *See the application Help menu or VERSION file for the current release version.*

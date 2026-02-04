@@ -114,6 +114,7 @@ class InstrumentTableModel(QtCore.QAbstractTableModel):
         "Days Left",
         "Status",
         "Instrument type",
+        "Flag",
     ]
 
     def _days_left(self, inst):
@@ -149,6 +150,8 @@ class InstrumentTableModel(QtCore.QAbstractTableModel):
                 return inst.get("status") or ""
             elif column == 8:
                 return inst.get("instrument_type_name") or ""
+            elif column == 9:
+                return "Fail" if (inst.get("last_cal_result") or "").strip().upper() == "FAIL" else ""
             return ""
 
         self.layoutAboutToBeChanged.emit()
@@ -173,7 +176,10 @@ class InstrumentTableModel(QtCore.QAbstractTableModel):
         inst = self.instruments[row]
 
         if role == QtCore.Qt.BackgroundRole:
+            last_failed = (inst.get("last_cal_result") or "").strip().upper() == "FAIL"
             days_left = self._days_left(inst)
+            if last_failed:
+                return QtGui.QColor(35, 90, 50)  # Dark green background
             if days_left is not None:
                 if days_left < 0:
                     return QtGui.QColor(80, 30, 30)
@@ -184,6 +190,9 @@ class InstrumentTableModel(QtCore.QAbstractTableModel):
             return None
 
         if role == QtCore.Qt.ForegroundRole:
+            last_failed = (inst.get("last_cal_result") or "").strip().upper() == "FAIL"
+            if last_failed:
+                return QtGui.QColor("#00E676")  # Bright green text
             days_left = self._days_left(inst)
             if days_left is not None and days_left < 0:
                 return QtGui.QColor("#FF6B6B")
@@ -211,6 +220,8 @@ class InstrumentTableModel(QtCore.QAbstractTableModel):
                 return inst.get("status", "")
             elif col == 8:
                 return inst.get("instrument_type_name", "") or ""
+            elif col == 9:
+                return "\u26A0 Fail" if (inst.get("last_cal_result") or "").strip().upper() == "FAIL" else ""
         return None
 
     def headerData(self, section, orientation, role=QtCore.Qt.DisplayRole):
@@ -247,6 +258,7 @@ class InstrumentFilterProxyModel(QtCore.QSortFilterProxyModel):
         self.type_filter = ""
         self.due_filter = "All"
         self.recently_modified_days = 0
+        self.failed_only = False
 
     def set_text_filter(self, text: str):
         self.text_filter = (text or "").lower().strip()
@@ -262,6 +274,10 @@ class InstrumentFilterProxyModel(QtCore.QSortFilterProxyModel):
 
     def set_due_filter(self, df: str):
         self.due_filter = df or "All"
+        self.invalidateFilter()
+
+    def set_failed_only(self, failed_only: bool):
+        self.failed_only = bool(failed_only)
         self.invalidateFilter()
 
     def set_recently_modified_days(self, days: int):
@@ -318,6 +334,13 @@ class InstrumentFilterProxyModel(QtCore.QSortFilterProxyModel):
                     return False
             elif self.due_filter == "Due in 30 days":
                 if days < 0 or days > 30:
+                    return False
+
+        if self.failed_only:
+            src = self.sourceModel()
+            if hasattr(src, "get_instrument_at_row"):
+                inst = src.get_instrument_at_row(source_row)
+                if not inst or (inst.get("last_cal_result") or "").strip().upper() != "FAIL":
                     return False
 
         if self.recently_modified_days > 0:

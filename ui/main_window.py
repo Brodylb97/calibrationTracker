@@ -255,29 +255,39 @@ class MainWindow(QtWidgets.QMainWindow):
         # Needs Attention panel (overdue, due soon, recently modified)
         # ------------------------------------------------------------------
         self._needs_attention_container = QtWidgets.QWidget()
-        needs_layout = QtWidgets.QHBoxLayout(self._needs_attention_container)
+        needs_layout = QtWidgets.QGridLayout(self._needs_attention_container)
         needs_layout.setContentsMargins(8, 4, 8, 4)
-        needs_layout.addWidget(QtWidgets.QLabel("Needs Attention:"))
+        needs_layout.setSpacing(6)
+        needs_layout.addWidget(QtWidgets.QLabel("Needs Attention:"), 0, 0)
         self._btn_overdue = QtWidgets.QPushButton("Overdue (0)")
         self._btn_overdue.setCheckable(True)
+        self._btn_overdue.setMinimumWidth(100)
         self._btn_overdue.setToolTip("Show instruments past due date")
         self._btn_overdue.clicked.connect(self._on_needs_attention_overdue)
-        needs_layout.addWidget(self._btn_overdue)
+        needs_layout.addWidget(self._btn_overdue, 0, 1)
         self._btn_due_soon = QtWidgets.QPushButton("Due soon (0)")
         self._btn_due_soon.setCheckable(True)
+        self._btn_due_soon.setMinimumWidth(100)
         self._btn_due_soon.setToolTip("Show instruments due within 30 days")
         self._btn_due_soon.clicked.connect(self._on_needs_attention_due_soon)
-        needs_layout.addWidget(self._btn_due_soon)
+        needs_layout.addWidget(self._btn_due_soon, 0, 2)
         self._btn_recently_modified = QtWidgets.QPushButton("Recently modified (0)")
         self._btn_recently_modified.setCheckable(True)
+        self._btn_recently_modified.setMinimumWidth(140)
         self._btn_recently_modified.setToolTip("Show instruments modified in the last 7 days")
         self._btn_recently_modified.clicked.connect(self._on_needs_attention_recently_modified)
-        needs_layout.addWidget(self._btn_recently_modified)
+        needs_layout.addWidget(self._btn_recently_modified, 0, 3)
+        self._btn_failed = QtWidgets.QPushButton("Last cal failed (0)")
+        self._btn_failed.setCheckable(True)
+        self._btn_failed.setMinimumWidth(120)
+        self._btn_failed.setToolTip("Show instruments whose most recent calibration failed")
+        self._btn_failed.clicked.connect(self._on_needs_attention_failed)
+        needs_layout.addWidget(self._btn_failed, 1, 0)
         self._btn_clear_attention = QtWidgets.QPushButton("Clear")
+        self._btn_clear_attention.setMinimumWidth(60)
         self._btn_clear_attention.setToolTip("Clear Needs Attention filter")
         self._btn_clear_attention.clicked.connect(self._on_needs_attention_clear)
-        needs_layout.addWidget(self._btn_clear_attention)
-        needs_layout.addStretch(1)
+        needs_layout.addWidget(self._btn_clear_attention, 1, 1)
         layout.addWidget(self._needs_attention_container)
 
         # ------------------------------------------------------------------
@@ -382,7 +392,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table.setTabKeyNavigation(True)
         
         # Minimum column widths and persistence (must be after header setup)
-        MIN_COLUMN_WIDTHS = (80, 120, 70, 120, 90, 90, 70, 90, 120)  # ID, Location, Type, etc.
+        MIN_COLUMN_WIDTHS = (80, 120, 70, 120, 90, 90, 70, 90, 120, 72)  # ID, Location, Type, ..., Flag
         for i, min_w in enumerate(MIN_COLUMN_WIDTHS):
             if i < header.count():
                 header.setMinimumSectionSize(min_w)
@@ -470,13 +480,19 @@ class MainWindow(QtWidgets.QMainWindow):
             n_recent = len(self.repo.get_recently_modified_instruments(7, include_archived=include_archived))
         except Exception:
             n_overdue = n_due_soon = n_recent = 0
+        n_failed = sum(
+            1 for i in self.model.instruments
+            if (i.get("last_cal_result") or "").strip().upper() == "FAIL"
+        )
         self._btn_overdue.setText(f"Overdue ({n_overdue})")
         self._btn_due_soon.setText(f"Due soon ({n_due_soon})")
         self._btn_recently_modified.setText(f"Recently modified ({n_recent})")
+        self._btn_failed.setText(f"Last cal failed ({n_failed})")
 
     def _on_needs_attention_overdue(self):
         self.due_filter_combo.setCurrentText("Overdue")
         self.proxy.set_recently_modified_days(0)
+        self.proxy.set_failed_only(False)
         self._on_filters_changed()
         self._update_needs_attention_button_states()
         self.statusBar().showMessage("Showing overdue instruments", 2000)
@@ -484,6 +500,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_needs_attention_due_soon(self):
         self.due_filter_combo.setCurrentText("Due in 30 days")
         self.proxy.set_recently_modified_days(0)
+        self.proxy.set_failed_only(False)
         self._on_filters_changed()
         self._update_needs_attention_button_states()
         self.statusBar().showMessage("Showing instruments due within 30 days", 2000)
@@ -492,14 +509,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self.due_filter_combo.setCurrentIndex(0)  # All
         self.proxy.set_due_filter("All")
         self.proxy.set_recently_modified_days(7)
+        self.proxy.set_failed_only(False)
         self._on_filters_changed()
         self._update_needs_attention_button_states()
         self.statusBar().showMessage("Showing instruments modified in last 7 days", 2000)
+
+    def _on_needs_attention_failed(self):
+        self.due_filter_combo.setCurrentIndex(0)
+        self.proxy.set_due_filter("All")
+        self.proxy.set_recently_modified_days(0)
+        self.proxy.set_failed_only(True)
+        self._on_filters_changed()
+        self._update_needs_attention_button_states()
+        self.statusBar().showMessage("Showing instruments whose last calibration failed", 2000)
 
     def _on_needs_attention_clear(self):
         self.due_filter_combo.setCurrentIndex(0)
         self.proxy.set_due_filter("All")
         self.proxy.set_recently_modified_days(0)
+        self.proxy.set_failed_only(False)
         self._on_filters_changed()
         self._update_needs_attention_button_states()
         self.statusBar().showMessage("Needs Attention filter cleared", 2000)
@@ -509,6 +537,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._btn_overdue.setChecked(self.due_filter_combo.currentText() == "Overdue")
         self._btn_due_soon.setChecked(self.due_filter_combo.currentText() == "Due in 30 days")
         self._btn_recently_modified.setChecked(self.proxy.recently_modified_days > 0)
+        self._btn_failed.setChecked(getattr(self.proxy, "failed_only", False))
 
     def _clear_filters(self):
         """Clear all filters and reset search."""
@@ -517,6 +546,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.type_filter_combo.setCurrentIndex(0)
         self.due_filter_combo.setCurrentIndex(0)
         self.proxy.set_recently_modified_days(0)
+        self.proxy.set_failed_only(False)
         self._on_filters_changed()
         self._update_needs_attention_button_states()
         self.statusBar().showMessage("Filters cleared", 2000)
@@ -1128,9 +1158,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.active_label = QtWidgets.QLabel("Active: 0")
         self.overdue_label = QtWidgets.QLabel("Overdue: 0")
         self.due_soon_label = QtWidgets.QLabel("Due in 30 days: 0")
+        self.failed_label = QtWidgets.QLabel("Last cal failed: 0")
+        self.failed_label.setToolTip("Instruments whose most recent calibration overall result was Fail (one per instrument)")
         
         # Style the labels (base styling)
-        for label in [self.total_label, self.active_label, self.overdue_label, self.due_soon_label]:
+        for label in [self.total_label, self.active_label, self.overdue_label, self.due_soon_label, self.failed_label]:
             label.setStyleSheet("padding: 4px 8px; border-radius: 3px;")
         self._apply_statistics_colors()
         
@@ -1138,12 +1170,13 @@ class MainWindow(QtWidgets.QMainWindow):
         stats_layout.addWidget(self.active_label)
         stats_layout.addWidget(self.overdue_label)
         stats_layout.addWidget(self.due_soon_label)
+        stats_layout.addWidget(self.failed_label)
         stats_layout.addStretch()
         
         return stats
     
     def _update_statistics(self):
-        """Update statistics panel with current data."""
+        """Update statistics panel with current data. Failed = instruments whose most recent calibration overall result is Fail (one per instrument)."""
         instruments = self.repo.list_instruments()
         total = len(instruments)
         
@@ -1165,11 +1198,17 @@ class MainWindow(QtWidgets.QMainWindow):
                         due_soon += 1
                 except Exception:
                     pass
-        
+
+        failed = sum(
+            1 for inst in instruments
+            if (str(inst.get("last_cal_result") or "").strip().upper() == "FAIL"
+        )
+
         self.total_label.setText(f"Total: {total}")
         self.active_label.setText(f"Active: {active}")
         self.overdue_label.setText(f"Overdue: {overdue}")
         self.due_soon_label.setText(f"Due in 30 days: {due_soon}")
+        self.failed_label.setText(f"Last cal failed: {failed}")
 
     def _apply_statistics_colors(self):
         """Apply theme-derived colors to statistics labels."""
@@ -1184,6 +1223,10 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         self.due_soon_label.setStyleSheet(
             f"padding: 4px 8px; border-radius: 3px; color: {accent};"
+        )
+        failed_color = "#00E676"  # Bright green
+        self.failed_label.setStyleSheet(
+            f"padding: 4px 8px; border-radius: 3px; color: {failed_color}; font-weight: bold;"
         )
     
     def _update_search_highlight(self):

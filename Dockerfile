@@ -47,4 +47,4 @@ print('Calibration Tracker: imports OK')"
 # RUN python -m pytest test_tolerance_service.py test_migrations.py -v --tb=short 2>/dev/null || true
 
 # Default: run install check again (can override for interactive use)
-CMD ["python", "-c", "from database import DB_PATH; from ui_main import run_gui; print('Install check OK')"]
+CMD ["py", "-c", "from database import DB_PATH; from ui_main import run_gui; print('Install check OK')"]

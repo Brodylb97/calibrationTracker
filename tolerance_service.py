@@ -5,7 +5,15 @@ Single source of truth for: tolerance types, equation parsing, pass/fail logic.
 Used by CalibrationFormDialog and (future) template preview / explain.
 See TEMPLATE_SYSTEM_IMPROVEMENT_PLAN.md for full design.
 
-Equations use Excel-like syntax: + - * / ^ (power), < > <= >=, and functions ABS(), MIN(), MAX(), ROUND(), AVERAGE().
+Equations use Excel-like syntax: + - * / ^ (power), < > <= >=, and functions:
+  ABS(), MIN(), MAX(), ROUND(), AVERAGE()
+  LINEST(ys, xs) - slope of least-squares line
+  INTERCEPT(ys, xs) - y-intercept of regression line
+  RSQ(ys, xs) - R-squared (coefficient of determination)
+  CORREL(ys, xs) - Pearson correlation coefficient
+  STDEV([vals]) - sample standard deviation
+  STDEVP([vals]) - population standard deviation
+  MEDIAN([vals]) - median of values
 """
 
 from __future__ import annotations
@@ -26,7 +34,12 @@ def _excel_to_python(equation: str) -> str:
     # Excel uses ^ for power
     s = s.replace("^", "**")
     # Allow Excel-style function names (case-insensitive)
-    s = re.sub(r"\b(ABS|MIN|MAX|ROUND|AVERAGE)\s*\(", lambda m: m.group(1).lower() + "(", s, flags=re.IGNORECASE)
+    s = re.sub(
+        r"\b(ABS|MIN|MAX|ROUND|AVERAGE|LINEST|INTERCEPT|RSQ|CORREL|STDEV|STDEVP|MEDIAN|PLOT)\s*\(",
+        lambda m: m.group(1).lower() + "(",
+        s,
+        flags=re.IGNORECASE,
+    )
     return s
 
 
@@ -35,6 +48,100 @@ def _average(*args: float) -> float:
     if not args:
         return 0.0
     return sum(args) / len(args)
+
+
+def _linest(known_ys: list[float], known_xs: list[float]) -> float:
+    """
+    Simple linear regression: fit y = mx + b by least squares.
+    Returns the slope m. Uses equal-length lists known_ys and known_xs.
+    If lengths differ or variance of x is zero, returns 0.0.
+    """
+    if not known_ys or not known_xs or len(known_ys) != len(known_xs):
+        return 0.0
+    n = len(known_ys)
+    sum_x = sum(known_xs)
+    sum_y = sum(known_ys)
+    sum_xx = sum(x * x for x in known_xs)
+    sum_xy = sum(x * y for x, y in zip(known_xs, known_ys))
+    denominator = n * sum_xx - sum_x * sum_x
+    if denominator == 0:
+        return 0.0
+    slope = (n * sum_xy - sum_x * sum_y) / denominator
+    return float(slope)
+
+
+def _intercept(known_ys: list[float], known_xs: list[float]) -> float:
+    """Y-intercept b of least-squares line y = mx + b."""
+    if not known_ys or not known_xs or len(known_ys) != len(known_xs):
+        return 0.0
+    n = len(known_ys)
+    mean_y = sum(known_ys) / n
+    mean_x = sum(known_xs) / n
+    slope = _linest(known_ys, known_xs)
+    return float(mean_y - slope * mean_x)
+
+
+def _rsq(known_ys: list[float], known_xs: list[float]) -> float:
+    """R-squared (coefficient of determination) for linear regression."""
+    if not known_ys or not known_xs or len(known_ys) != len(known_xs):
+        return 0.0
+    n = len(known_ys)
+    mean_y = sum(known_ys) / n
+    slope = _linest(known_ys, known_xs)
+    intercept = _intercept(known_ys, known_xs)
+    ss_tot = sum((y - mean_y) ** 2 for y in known_ys)
+    if ss_tot == 0:
+        return 1.0
+    ss_res = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(known_xs, known_ys))
+    return float(1.0 - ss_res / ss_tot)
+
+
+def _correl(known_ys: list[float], known_xs: list[float]) -> float:
+    """Pearson correlation coefficient between two lists."""
+    if not known_ys or not known_xs or len(known_ys) != len(known_xs):
+        return 0.0
+    n = len(known_ys)
+    sum_x = sum(known_xs)
+    sum_y = sum(known_ys)
+    sum_xx = sum(x * x for x in known_xs)
+    sum_yy = sum(y * y for y in known_ys)
+    sum_xy = sum(x * y for x, y in zip(known_xs, known_ys))
+    denom = (n * sum_xx - sum_x * sum_x) * (n * sum_yy - sum_y * sum_y)
+    if denom <= 0:
+        return 0.0
+    return float((n * sum_xy - sum_x * sum_y) / (denom ** 0.5))
+
+
+def _stdev(values: list[float]) -> float:
+    """Sample standard deviation (n-1 denominator)."""
+    if not values or len(values) < 2:
+        return 0.0
+    n = len(values)
+    mean = sum(values) / n
+    variance = sum((x - mean) ** 2 for x in values) / (n - 1)
+    return float(variance ** 0.5)
+
+
+def _stdevp(values: list[float]) -> float:
+    """Population standard deviation (n denominator)."""
+    if not values:
+        return 0.0
+    n = len(values)
+    mean = sum(values) / n
+    variance = sum((x - mean) ** 2 for x in values) / n
+    return float(variance ** 0.5)
+
+
+def _median(values: list[float]) -> float:
+    """Median of values."""
+    if not values:
+        return 0.0
+    sorted_vals = sorted(values)
+    n = len(sorted_vals)
+    mid = n // 2
+    if n % 2 == 1:
+        return float(sorted_vals[mid])
+    return float((sorted_vals[mid - 1] + sorted_vals[mid]) / 2)
 
 
 # Allowed AST node types and binary ops (no eval of user input)
@@ -119,10 +226,49 @@ def _eval_node(node: ast.AST, vars_map: dict[str, float]) -> float:
     if isinstance(node, ast.Call):
         if not isinstance(node.func, ast.Name):
             raise ValueError("Only simple function calls allowed")
+        # Two-list args: LINEST, INTERCEPT, RSQ, CORREL
+        two_list_funcs = {
+            "linest": _linest,
+            "intercept": _intercept,
+            "rsq": _rsq,
+            "correl": _correl,
+        }
+        if node.func.id in two_list_funcs:
+            if len(node.args) != 2:
+                raise ValueError(
+                    f"{node.func.id.upper()} requires two arguments: [known_y's], [known_x's]"
+                )
+            for arg in node.args:
+                if not isinstance(arg, ast.List):
+                    raise ValueError(
+                        f"{node.func.id.upper()} arguments must be lists, "
+                        "e.g. LINEST([val1,val2], [ref1,ref2])"
+                    )
+            list_y = [_eval_node(elt, vars_map) for elt in node.args[0].elts]
+            list_x = [_eval_node(elt, vars_map) for elt in node.args[1].elts]
+            return float(two_list_funcs[node.func.id](list_y, list_x))
+        # Single-list args: STDEV, STDEVP, MEDIAN
+        one_list_funcs = {"stdev": _stdev, "stdevp": _stdevp, "median": _median}
+        if node.func.id in one_list_funcs:
+            if len(node.args) != 1:
+                raise ValueError(
+                    f"{node.func.id.upper()} requires one argument: [val1, val2, ...]"
+                )
+            if not isinstance(node.args[0], ast.List):
+                raise ValueError(
+                    f"{node.func.id.upper()} argument must be a list, "
+                    "e.g. STDEV([val1, val2, val3])"
+                )
+            vals = [_eval_node(elt, vars_map) for elt in node.args[0].elts]
+            return float(one_list_funcs[node.func.id](vals))
         if node.func.id not in _ALLOWED_FUNCS:
             raise ValueError(f"Disallowed function: {node.func.id}")
         args = [_eval_node(a, vars_map) for a in node.args]
         return float(_ALLOWED_FUNCS[node.func.id](*args))
+    if isinstance(node, ast.List):
+        raise ValueError(
+            "List literals are only allowed inside LINEST, INTERCEPT, RSQ, CORREL, STDEV, STDEVP, MEDIAN"
+        )
     raise ValueError(f"Unsupported expression: {type(node).__name__}")
 
 
@@ -135,10 +281,13 @@ def parse_equation(equation: str) -> ast.Expression:
         raise ValueError("Equation is empty")
     eq = _excel_to_python(equation.strip())
     tree = ast.parse(eq, mode="eval")
-    # Reject attribute access, subscripts, etc.
+    # Reject attribute access, subscripts, etc. (ast.List allowed only as argument to LINEST)
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Attribute, ast.Subscript, ast.Lambda, ast.List, ast.Dict)):
-            raise ValueError("Only numeric expressions with + - * / ^ < > <= >= and ABS, MIN, MAX, ROUND, AVERAGE allowed")
+        if isinstance(node, (ast.Attribute, ast.Subscript, ast.Lambda, ast.Dict)):
+            raise ValueError(
+                "Only numeric expressions with + - * / ^ < > <= >= and "
+                "ABS, MIN, MAX, ROUND, AVERAGE, LINEST, INTERCEPT, RSQ, CORREL, STDEV, STDEVP, MEDIAN allowed"
+            )
     return tree.body
 
 
@@ -151,20 +300,91 @@ def list_variables(equation: str) -> list[str]:
         return []
     names = []
     seen = set()
+    _func_names = set(_ALLOWED_FUNCS) | {
+        "linest", "intercept", "rsq", "correl", "stdev", "stdevp", "median", "plot"
+    }
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and isinstance(getattr(node, "ctx", None), ast.Load):
-            if node.id in _ALLOWED_FUNCS:
-                continue  # skip function names (abs, min, max, round, average)
+            if node.id in _func_names:
+                continue  # skip function names (abs, min, max, round, average, linest, plot)
             if node.id not in seen:
                 seen.add(node.id)
                 names.append(node.id)
     return names
 
 
+def parse_plot_equation(equation: str) -> tuple[list[str], list[str]]:
+    """
+    Parse PLOT([x1, x2, ...], [y1, y2, ...]) equation.
+    Returns (x_var_names, y_var_names). Each list contains variable names (val1, ref1, etc.).
+    Total number of variables must be between 1 and 12.
+    Raises ValueError on syntax error or invalid form.
+    """
+    if not (equation or "").strip():
+        raise ValueError("Plot equation is empty")
+    eq = _excel_to_python(equation.strip())
+    tree = ast.parse(eq, mode="eval")
+    body = tree.body
+    if not isinstance(body, ast.Call) or not isinstance(body.func, ast.Name):
+        raise ValueError("Plot must be PLOT([x1, x2, ...], [y1, y2, ...])")
+    if body.func.id != "plot":
+        raise ValueError("Plot must be PLOT([x1, x2, ...], [y1, y2, ...])")
+    if len(body.args) != 2:
+        raise ValueError("PLOT requires two arguments: [x values], [y values]")
+    x_list = body.args[0]
+    y_list = body.args[1]
+    if not isinstance(x_list, ast.List) or not isinstance(y_list, ast.List):
+        raise ValueError("PLOT arguments must be lists, e.g. PLOT([val1, val2], [val3, val4])")
+
+    def names_from_list(node_list: ast.List) -> list[str]:
+        out = []
+        for elt in node_list.elts:
+            if not isinstance(elt, ast.Name):
+                raise ValueError("PLOT lists must contain only variable names (val1, val2, ...)")
+            out.append(elt.id)
+        return out
+
+    x_names = names_from_list(x_list)
+    y_names = names_from_list(y_list)
+    if len(x_names) != len(y_names):
+        raise ValueError("PLOT X and Y lists must have the same length")
+    total = len(x_names) + len(y_names)
+    if total == 0:
+        raise ValueError("PLOT must have at least one point")
+    if total > 12:
+        raise ValueError("PLOT allows at most 12 variables total (x count + y count)")
+    for n in x_names + y_names:
+        if n not in ALLOWED_VARIABLES:
+            raise ValueError(f"Unknown variable in PLOT: {n}. Use val1..val12 or ref1..ref12.")
+    return (x_names, y_names)
+
+
+def evaluate_plot_equation(equation: str, vars_map: dict[str, float]) -> tuple[list[float], list[float]]:
+    """
+    Evaluate PLOT([x vars], [y vars]) with given vars_map (ref1/val1 etc.).
+    Returns (x_values, y_values) as two lists of floats for charting.
+    """
+    v = _ensure_val_aliases(dict(vars_map))
+    x_names, y_names = parse_plot_equation(equation)
+    xs = []
+    ys = []
+    for n in x_names:
+        val = v.get(n)
+        if val is None:
+            raise ValueError(f"Variable '{n}' not provided for plot")
+        xs.append(float(val))
+    for n in y_names:
+        val = v.get(n)
+        if val is None:
+            raise ValueError(f"Variable '{n}' not provided for plot")
+        ys.append(float(val))
+    return (xs, ys)
+
+
 def _ensure_val_aliases(vars_map: dict[str, float]) -> dict[str, float]:
-    """Ensure val1-val5 are set from ref1-ref5 for backward compatibility."""
+    """Ensure val1-val12 are set from ref1-ref12 for backward compatibility."""
     v = dict(vars_map)
-    for i in range(1, 6):
+    for i in range(1, 13):
         rk, vk = f"ref{i}", f"val{i}"
         if rk in v and vk not in v:
             v[vk] = v[rk]
@@ -303,8 +523,10 @@ def evaluate_tolerance_lookup(
     return 0.0
 
 
-# Allowed variable names for equation validation (val1-val5 are aliases for ref1-ref5)
-ALLOWED_VARIABLES = {"nominal", "reading", "ref1", "ref2", "ref3", "ref4", "ref5", "val1", "val2", "val3", "val4", "val5", "ref", "value", "abs_nominal"}
+# Allowed variable names for equation validation (val1-val12 are aliases for ref1-ref12)
+ALLOWED_VARIABLES = {"nominal", "reading", "ref", "value", "abs_nominal"} | {
+    f"ref{i}" for i in range(1, 13)
+} | {f"val{i}" for i in range(1, 13)}
 
 
 def validate_equation_variables(equation: str) -> tuple[bool, list[str]]:
@@ -321,6 +543,7 @@ def equation_has_pass_fail_condition(equation: str) -> bool:
     """
     Check that equation contains a comparison (<, >, <=, >=, ==).
     Used for tolerance equations that must express pass/fail.
+    Stat-type fields use LINEST and do not require this check.
     """
     try:
         body = parse_equation(equation.strip())
@@ -333,12 +556,19 @@ def equation_has_pass_fail_condition(equation: str) -> bool:
     return False
 
 
-def format_calculation_display(value: float, sig_figs: int = 3) -> str:
-    """Format a calculated value for display with given significant figures (default 3)."""
-    if value == 0:
-        return "0"
+def format_calculation_display(
+    value: float, sig_figs: int | None = 3, decimal_places: int | None = None
+) -> str:
+    """Format a calculated value for display.
+    If decimal_places is not None, format with that many decimal places (e.g. 2 -> 50.00).
+    Otherwise use sig_figs significant figures (default 3).
+    """
     try:
-        return f"{value:.{sig_figs}g}"
+        if decimal_places is not None:
+            return f"{value:.{decimal_places}f}"
+        if value == 0:
+            return "0"
+        return f"{value:.{sig_figs or 3}g}"
     except (TypeError, ValueError):
         return str(value)
 

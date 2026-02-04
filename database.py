@@ -534,7 +534,7 @@ def _initialize_db_core(conn: sqlite3.Connection, db_path: Path | None = None) -
         cur.execute("ALTER TABLE calibration_template_fields ADD COLUMN calc_ref1_name TEXT")
     if "calc_ref2_name" not in cols:
         cur.execute("ALTER TABLE calibration_template_fields ADD COLUMN calc_ref2_name TEXT")
-    for ref_col in ("calc_ref3_name", "calc_ref4_name", "calc_ref5_name"):
+    for ref_col in ("calc_ref3_name", "calc_ref4_name", "calc_ref5_name", "calc_ref6_name", "calc_ref7_name", "calc_ref8_name", "calc_ref9_name", "calc_ref10_name"):
         if ref_col not in cols:
             cur.execute(f"ALTER TABLE calibration_template_fields ADD COLUMN {ref_col} TEXT")
     if "tolerance" not in cols:
@@ -543,7 +543,10 @@ def _initialize_db_core(conn: sqlite3.Connection, db_path: Path | None = None) -
         cur.execute("ALTER TABLE calibration_template_fields ADD COLUMN autofill_from_first_group INTEGER NOT NULL DEFAULT 0")
     if "default_value" not in cols:
         cur.execute("ALTER TABLE calibration_template_fields ADD COLUMN default_value TEXT")
-
+    if "sig_figs" not in cols:
+        cur.execute("ALTER TABLE calibration_template_fields ADD COLUMN sig_figs INTEGER DEFAULT 3")
+    if "stat_value_group" not in cols:
+        cur.execute("ALTER TABLE calibration_template_fields ADD COLUMN stat_value_group TEXT")
 
     # Calibration records per instrument
     cur.execute(
@@ -1157,6 +1160,13 @@ class CalibrationRepository:
         calc_ref3_name: str | None = None,
         calc_ref4_name: str | None = None,
         calc_ref5_name: str | None = None,
+        calc_ref6_name: str | None = None,
+        calc_ref7_name: str | None = None,
+        calc_ref8_name: str | None = None,
+        calc_ref9_name: str | None = None,
+        calc_ref10_name: str | None = None,
+        calc_ref11_name: str | None = None,
+        calc_ref12_name: str | None = None,
         tolerance: float | None = None,
         autofill_from_first_group: bool = False,
         default_value: str | None = None,
@@ -1164,18 +1174,51 @@ class CalibrationRepository:
         tolerance_equation: str | None = None,
         nominal_value: str | None = None,
         tolerance_lookup_json: str | None = None,
+        sig_figs: int | None = 3,
+        stat_value_group: str | None = None,
+        plot_x_axis_name: str | None = None,
+        plot_y_axis_name: str | None = None,
+        plot_title: str | None = None,
+        plot_x_min: float | None = None,
+        plot_x_max: float | None = None,
+        plot_y_min: float | None = None,
+        plot_y_max: float | None = None,
+        plot_best_fit: bool = False,
     ) -> int:
         """
         Insert a new template field. Safe for both normal and computed fields.
         tolerance_type: 'fixed' | 'percent' | 'equation' | 'lookup' | None (legacy fixed).
+        stat_value_group: for stat type, which group's fields to use for val1..val12 (value selection).
+        plot_*: for plot type, axis names, title, ranges, and best-fit option.
         """
         cur = self.conn.cursor()
         cur.execute("PRAGMA table_info(calibration_template_fields)")
         cols = [r[1] for r in cur.fetchall()]
+        has_plot = "plot_x_axis_name" in cols
+        plot_sql = ", plot_x_axis_name, plot_y_axis_name, plot_title, plot_x_min, plot_x_max, plot_y_min, plot_y_max, plot_best_fit" if has_plot else ""
+        plot_ph = ", ?, ?, ?, ?, ?, ?, ?, ?" if has_plot else ""
+        plot_vals = (plot_x_axis_name, plot_y_axis_name, plot_title, plot_x_min, plot_x_max, plot_y_min, plot_y_max, 1 if plot_best_fit else 0) if has_plot else ()
         has_ref3 = "calc_ref3_name" in cols
         ref3_sql = ", calc_ref3_name, calc_ref4_name, calc_ref5_name" if has_ref3 else ""
         ref3_ph = ", ?, ?, ?" if has_ref3 else ""
         ref3_vals = (calc_ref3_name, calc_ref4_name, calc_ref5_name) if has_ref3 else ()
+        has_ref6 = "calc_ref6_name" in cols
+        ref6_sql = ", calc_ref6_name, calc_ref7_name, calc_ref8_name, calc_ref9_name, calc_ref10_name" if has_ref6 else ""
+        ref6_ph = ", ?, ?, ?, ?, ?" if has_ref6 else ""
+        ref6_vals = (calc_ref6_name, calc_ref7_name, calc_ref8_name, calc_ref9_name, calc_ref10_name) if has_ref6 else ()
+        has_ref11 = "calc_ref11_name" in cols
+        ref11_sql = ", calc_ref11_name, calc_ref12_name" if has_ref11 else ""
+        ref11_ph = ", ?, ?" if has_ref11 else ""
+        ref11_vals = (calc_ref11_name, calc_ref12_name) if has_ref11 else ()
+        sig_figs_val = 3 if sig_figs is None else max(0, min(4, int(sig_figs)))  # decimal places for display
+        has_sig_figs = "sig_figs" in cols
+        sig_figs_sql = ", sig_figs" if has_sig_figs else ""
+        sig_figs_ph = ", ?" if has_sig_figs else ""
+        sig_figs_vals = (sig_figs_val,) if has_sig_figs else ()
+        has_stat_value_group = "stat_value_group" in cols
+        stat_value_group_sql = ", stat_value_group" if has_stat_value_group else ""
+        stat_value_group_ph = ", ?" if has_stat_value_group else ""
+        stat_value_group_vals = (stat_value_group,) if has_stat_value_group else ()
         if "tolerance_type" in cols:
             if "tolerance_lookup_json" in cols:
                 cur.execute(
@@ -1183,10 +1226,10 @@ class CalibrationRepository:
                     INSERT INTO calibration_template_fields
                         (template_id, name, label, data_type, unit,
                          required, sort_order, group_name,
-                         calc_type, calc_ref1_name, calc_ref2_name""" + ref3_sql + """,
+                         calc_type, calc_ref1_name, calc_ref2_name""" + ref3_sql + ref6_sql + ref11_sql + """,
                          tolerance, autofill_from_first_group, default_value,
-                         tolerance_type, tolerance_equation, nominal_value, tolerance_lookup_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?""" + ref3_ph + """, ?, ?, ?, ?, ?, ?, ?)
+                         tolerance_type, tolerance_equation, nominal_value, tolerance_lookup_json""" + sig_figs_sql + stat_value_group_sql + plot_sql + """)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?""" + ref3_ph + ref6_ph + ref11_ph + """, ?, ?, ?, ?, ?, ?, ?""" + sig_figs_ph + stat_value_group_ph + plot_ph + """)
                     """,
                     (
                         template_id,
@@ -1201,6 +1244,8 @@ class CalibrationRepository:
                         calc_ref1_name,
                         calc_ref2_name,
                         *ref3_vals,
+                        *ref6_vals,
+                        *ref11_vals,
                         tolerance,
                         1 if autofill_from_first_group else 0,
                         default_value,
@@ -1208,6 +1253,9 @@ class CalibrationRepository:
                         tolerance_equation,
                         nominal_value,
                         tolerance_lookup_json,
+                        *sig_figs_vals,
+                        *stat_value_group_vals,
+                        *plot_vals,
                     ),
                 )
             else:
@@ -1216,10 +1264,10 @@ class CalibrationRepository:
                     INSERT INTO calibration_template_fields
                         (template_id, name, label, data_type, unit,
                          required, sort_order, group_name,
-                         calc_type, calc_ref1_name, calc_ref2_name""" + ref3_sql + """,
+                         calc_type, calc_ref1_name, calc_ref2_name""" + ref3_sql + ref6_sql + ref11_sql + """,
                          tolerance, autofill_from_first_group, default_value,
-                         tolerance_type, tolerance_equation, nominal_value)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?""" + ref3_ph + """, ?, ?, ?, ?, ?, ?, ?)
+                         tolerance_type, tolerance_equation, nominal_value""" + sig_figs_sql + stat_value_group_sql + plot_sql + """)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?""" + ref3_ph + ref6_ph + ref11_ph + """, ?, ?, ?, ?, ?, ?, ?""" + sig_figs_ph + stat_value_group_ph + plot_ph + """)
                     """,
                     (
                         template_id,
@@ -1234,12 +1282,17 @@ class CalibrationRepository:
                         calc_ref1_name,
                         calc_ref2_name,
                         *ref3_vals,
+                        *ref6_vals,
+                        *ref11_vals,
                         tolerance,
                         1 if autofill_from_first_group else 0,
                         default_value,
                         tolerance_type,
                         tolerance_equation,
                         nominal_value,
+                        *sig_figs_vals,
+                        *stat_value_group_vals,
+                        *plot_vals,
                     ),
                 )
         else:
@@ -1248,9 +1301,9 @@ class CalibrationRepository:
                 INSERT INTO calibration_template_fields
                     (template_id, name, label, data_type, unit,
                      required, sort_order, group_name,
-                     calc_type, calc_ref1_name, calc_ref2_name""" + ref3_sql + """,
-                     tolerance, autofill_from_first_group, default_value)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?""" + ref3_ph + """, ?, ?, ?)
+                     calc_type, calc_ref1_name, calc_ref2_name""" + ref3_sql + ref6_sql + ref11_sql + """,
+                     tolerance, autofill_from_first_group, default_value""" + sig_figs_sql + stat_value_group_sql + plot_sql + """)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?""" + ref3_ph + ref6_ph + ref11_ph + """, ?, ?, ?""" + sig_figs_ph + stat_value_group_ph + plot_ph + """)
                 """,
                 (
                     template_id,
@@ -1265,9 +1318,14 @@ class CalibrationRepository:
                     calc_ref1_name,
                     calc_ref2_name,
                     *ref3_vals,
+                    *ref6_vals,
+                    *ref11_vals,
                     tolerance,
                     1 if autofill_from_first_group else 0,
                     default_value,
+                    *sig_figs_vals,
+                    *stat_value_group_vals,
+                    *plot_vals,
                 ),
             )
         self.conn.commit()
@@ -1321,9 +1379,36 @@ class CalibrationRepository:
             params["calc_ref3_name"] = data.get("calc_ref3_name")
             params["calc_ref4_name"] = data.get("calc_ref4_name")
             params["calc_ref5_name"] = data.get("calc_ref5_name")
+        if "calc_ref6_name" in cols:
+            set_clause += ", calc_ref6_name = :calc_ref6_name, calc_ref7_name = :calc_ref7_name, calc_ref8_name = :calc_ref8_name, calc_ref9_name = :calc_ref9_name, calc_ref10_name = :calc_ref10_name"
+            params["calc_ref6_name"] = data.get("calc_ref6_name")
+            params["calc_ref7_name"] = data.get("calc_ref7_name")
+            params["calc_ref8_name"] = data.get("calc_ref8_name")
+            params["calc_ref9_name"] = data.get("calc_ref9_name")
+            params["calc_ref10_name"] = data.get("calc_ref10_name")
+        if "calc_ref11_name" in cols:
+            set_clause += ", calc_ref11_name = :calc_ref11_name, calc_ref12_name = :calc_ref12_name"
+            params["calc_ref11_name"] = data.get("calc_ref11_name")
+            params["calc_ref12_name"] = data.get("calc_ref12_name")
         if "tolerance_lookup_json" in cols:
             set_clause += ", tolerance_lookup_json = :tolerance_lookup_json"
             params["tolerance_lookup_json"] = data.get("tolerance_lookup_json")
+        if "sig_figs" in cols:
+            set_clause += ", sig_figs = :sig_figs"
+            params["sig_figs"] = data.get("sig_figs", 3)
+        if "stat_value_group" in cols:
+            set_clause += ", stat_value_group = :stat_value_group"
+            params["stat_value_group"] = data.get("stat_value_group")
+        if "plot_x_axis_name" in cols:
+            set_clause += ", plot_x_axis_name = :plot_x_axis_name, plot_y_axis_name = :plot_y_axis_name, plot_title = :plot_title, plot_x_min = :plot_x_min, plot_x_max = :plot_x_max, plot_y_min = :plot_y_min, plot_y_max = :plot_y_max, plot_best_fit = :plot_best_fit"
+            params["plot_x_axis_name"] = data.get("plot_x_axis_name")
+            params["plot_y_axis_name"] = data.get("plot_y_axis_name")
+            params["plot_title"] = data.get("plot_title")
+            params["plot_x_min"] = data.get("plot_x_min")
+            params["plot_x_max"] = data.get("plot_x_max")
+            params["plot_y_min"] = data.get("plot_y_min")
+            params["plot_y_max"] = data.get("plot_y_max")
+            params["plot_best_fit"] = 1 if data.get("plot_best_fit") else 0
         cur.execute(
             f"UPDATE calibration_template_fields SET {set_clause} WHERE id = :id",
             params,
@@ -1422,7 +1507,8 @@ class CalibrationRepository:
         field_cols = {r[1] for r in cur.fetchall()}
         extra = []
         for col in ("tolerance_type", "tolerance_equation", "nominal_value", "tolerance_lookup_json",
-                    "calc_ref3_name", "calc_ref4_name", "calc_ref5_name"):
+                    "calc_ref3_name", "calc_ref4_name", "calc_ref5_name", "calc_ref6_name", "calc_ref7_name", "calc_ref8_name", "calc_ref9_name", "calc_ref10_name", "calc_ref11_name", "calc_ref12_name", "sig_figs", "stat_value_group",
+                    "plot_x_axis_name", "plot_y_axis_name", "plot_title", "plot_x_min", "plot_x_max", "plot_y_min", "plot_y_max", "plot_best_fit"):
             if col in field_cols:
                 extra.append(f"f.{col}")
         extra_sql = ", " + ", ".join(extra) if extra else ""
@@ -1735,6 +1821,21 @@ class CalibrationRepository:
         cols = [r[1] for r in cur.fetchall()]
         if "deleted_at" in cols and not include_archived:
             query += " WHERE (i.deleted_at IS NULL OR i.deleted_at = '')"
+
+        # Overall result (Pass/Fail) of the single most recent calibration record per instrument only
+        cur.execute("PRAGMA table_info(calibration_records)")
+        rec_cols = [r[1] for r in cur.fetchall()]
+        cal_deleted_filter = " AND (r.deleted_at IS NULL OR r.deleted_at = '')" if "deleted_at" in rec_cols and not include_archived else ""
+        subq = (
+            "(SELECT r.result FROM calibration_records r "
+            "WHERE r.instrument_id = i.id" + cal_deleted_filter + " "
+            "ORDER BY r.cal_date DESC, r.id DESC LIMIT 1) AS last_cal_result"
+        )
+        query = query.replace(
+            " it.name AS instrument_type_name\n        FROM instruments i",
+            " it.name AS instrument_type_name,\n               " + subq + "\n        FROM instruments i",
+        )
+
         query += " ORDER BY date(i.next_due_date) ASC, i.tag_number"
         cur = self.conn.execute(query)
         return [dict(r) for r in cur.fetchall()]

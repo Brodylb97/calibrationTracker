@@ -110,6 +110,67 @@ class TestEvaluateToleranceEquation(unittest.TestCase):
             15.0,
         )
 
+    def test_statistical_functions(self):
+        # LINEST: slope of y=[1,2,3] vs x=[1,2,3] is 1.0
+        self.assertAlmostEqual(
+            evaluate_tolerance_equation("LINEST([val1, val2, val3], [ref1, ref2, ref3])", {
+                "val1": 1, "val2": 2, "val3": 3,
+                "ref1": 1, "ref2": 2, "ref3": 3,
+            }),
+            1.0,
+        )
+        # INTERCEPT: y=2x+1, intercept is 1
+        self.assertAlmostEqual(
+            evaluate_tolerance_equation("INTERCEPT([val1, val2], [ref1, ref2])", {
+                "val1": 3, "val2": 5, "ref1": 1, "ref2": 2,
+            }),
+            1.0,
+        )
+        # STDEV: sample stdev of [2, 4, 4, 4, 5] ≈ 1.095
+        self.assertAlmostEqual(
+            evaluate_tolerance_equation("STDEV([val1, val2, val3, val4, val5])", {
+                "val1": 2, "val2": 4, "val3": 4, "val4": 4, "val5": 5,
+            }),
+            1.0954,
+            places=3,
+        )
+        # STDEVP: population stdev
+        self.assertAlmostEqual(
+            evaluate_tolerance_equation("STDEVP([val1, val2, val3])", {
+                "val1": 2, "val2": 4, "val3": 6,
+            }),
+            1.632993,
+            places=4,
+        )
+        # MEDIAN: odd count
+        self.assertAlmostEqual(
+            evaluate_tolerance_equation("MEDIAN([val1, val2, val3])", {
+                "val1": 1, "val2": 3, "val3": 5,
+            }),
+            3.0,
+        )
+        # MEDIAN: even count
+        self.assertAlmostEqual(
+            evaluate_tolerance_equation("MEDIAN([val1, val2, val3, val4])", {
+                "val1": 1, "val2": 3, "val3": 5, "val4": 7,
+            }),
+            4.0,
+        )
+        # RSQ and CORREL: perfect correlation
+        self.assertAlmostEqual(
+            evaluate_tolerance_equation("RSQ([val1, val2, val3], [ref1, ref2, ref3])", {
+                "val1": 1, "val2": 2, "val3": 3,
+                "ref1": 1, "ref2": 2, "ref3": 3,
+            }),
+            1.0,
+        )
+        self.assertAlmostEqual(
+            evaluate_tolerance_equation("CORREL([val1, val2], [ref1, ref2])", {
+                "val1": 1, "val2": 2, "ref1": 1, "ref2": 2,
+            }),
+            1.0,
+        )
+
     def test_comparison_operators(self):
         self.assertAlmostEqual(evaluate_tolerance_equation("1 < 2", {}), 1.0)
         self.assertAlmostEqual(evaluate_tolerance_equation("1 > 2", {}), 0.0)

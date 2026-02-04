@@ -5,13 +5,13 @@ A desktop application for managing instrument calibrations: track instruments, r
 ## Features
 
 - **Instrument management** — ID, location, type, serial number, next due date, status
-- **Calibration records** — Templates with custom fields, signatures, autofill, and external-file attachments
-- **Visual indicators** — Color-coded table for overdue and upcoming due dates
+- **Calibration records** — Templates with custom fields, signatures, autofill, statistical functions (LINEST, STDEV, MEDIAN, etc.), and external-file attachments
+- **Visual indicators** — Color-coded table for overdue, upcoming due dates, and last calibration failed (bright green); Needs Attention quick filters (Overdue, Due soon, Recently modified, Last cal failed)
 - **Export** — Current view to CSV; single calibration or all calibrations to PDF (instrument info, template, values; AHI logo on in-house exports)
 - **LAN reminders** — Broadcast reminders for instruments due for calibration
 - **Automatic backups** — Daily database backups in `backups/` (30-day retention)
-- **Themes** — Help → Theme: Fusion, Taylor's Theme, Tess's Theme, Retina Seering, Vice (choice saved locally)
-- **Text size** — Help → Text Size: Small, Medium, Large, Extra Large (choice saved locally)
+- **Themes** — View → Theme: Fusion, Taylor's Theme, Tess's Theme, Retina Seering, Vice (choice saved locally)
+- **Text size** — View → Text Size: Small, Medium, Large, Extra Large (choice saved locally)
 - **Check for updates** — Help → Check for Updates (manual check shows “already current” or offers update; startup check only prompts when an update is available or the check fails). For installed users to receive new UI and features, releases must include a built update zip; see BUILD_INSTRUCTIONS.md.
 
 ## Requirements

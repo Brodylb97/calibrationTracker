@@ -329,6 +329,397 @@ def migrate_7_add_tolerance_type(conn: sqlite3.Connection) -> None:
     logger.info("Migration 7 applied: added 'tolerance' to calibration_template_fields.data_type")
 
 
+def migrate_8_add_convert_type(conn: sqlite3.Connection) -> None:
+    """Add 'convert' to calibration_template_fields.data_type CHECK (computed from equation)."""
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(calibration_template_fields)")
+    old_cols = [r[1] for r in cur.fetchall()]
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        cur.execute(
+            """
+            CREATE TABLE calibration_template_fields_new (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id     INTEGER NOT NULL REFERENCES calibration_templates(id) ON DELETE CASCADE,
+                name            TEXT NOT NULL,
+                label           TEXT NOT NULL,
+                data_type       TEXT NOT NULL CHECK (data_type IN ('text', 'number', 'bool', 'date', 'signature', 'reference', 'tolerance', 'convert')),
+                unit            TEXT,
+                required        INTEGER NOT NULL DEFAULT 0,
+                sort_order      INTEGER NOT NULL DEFAULT 0,
+                group_name      TEXT,
+                calc_type       TEXT,
+                calc_ref1_name  TEXT,
+                calc_ref2_name  TEXT,
+                calc_ref3_name  TEXT,
+                calc_ref4_name  TEXT,
+                calc_ref5_name  TEXT,
+                tolerance       REAL,
+                autofill_from_first_group INTEGER NOT NULL DEFAULT 0,
+                default_value   TEXT,
+                tolerance_type  TEXT,
+                tolerance_equation TEXT,
+                nominal_value   TEXT,
+                tolerance_lookup_json TEXT
+            )
+            """
+        )
+        sel_cols = [c for c in old_cols if c in (
+            "id", "template_id", "name", "label", "data_type", "unit", "required", "sort_order",
+            "group_name", "calc_type", "calc_ref1_name", "calc_ref2_name", "calc_ref3_name",
+            "calc_ref4_name", "calc_ref5_name", "tolerance", "autofill_from_first_group",
+            "default_value", "tolerance_type", "tolerance_equation", "nominal_value", "tolerance_lookup_json"
+        )]
+        sel_list = ", ".join(sel_cols)
+        ins_list = ", ".join(sel_cols)
+        cur.execute(
+            f"INSERT INTO calibration_template_fields_new ({ins_list}) SELECT {sel_list} FROM calibration_template_fields"
+        )
+        cur.execute("DROP TABLE calibration_template_fields")
+        cur.execute("ALTER TABLE calibration_template_fields_new RENAME TO calibration_template_fields")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_template_id ON calibration_template_fields(template_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_sort_order ON calibration_template_fields(template_id, sort_order)")
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    logger.info("Migration 8 applied: added 'convert' to calibration_template_fields.data_type")
+
+
+def migrate_9_add_sig_figs(conn: sqlite3.Connection) -> None:
+    """Add sig_figs column for convert-type field display (significant figures)."""
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(calibration_template_fields)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "sig_figs" in cols:
+        return
+    cur.execute(
+        "ALTER TABLE calibration_template_fields ADD COLUMN sig_figs INTEGER DEFAULT 3"
+    )
+    conn.commit()
+    logger.info("Migration 9 applied: added sig_figs to calibration_template_fields")
+
+
+def migrate_10_add_stat_type_and_ref6_ref10(conn: sqlite3.Connection) -> None:
+    """Add 'stat' to data_type CHECK and add calc_ref6_name through calc_ref10_name for more equation variables."""
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(calibration_template_fields)")
+    old_cols = [r[1] for r in cur.fetchall()]
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        cur.execute(
+            """
+            CREATE TABLE calibration_template_fields_new (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id     INTEGER NOT NULL REFERENCES calibration_templates(id) ON DELETE CASCADE,
+                name            TEXT NOT NULL,
+                label           TEXT NOT NULL,
+                data_type       TEXT NOT NULL CHECK (data_type IN ('text', 'number', 'bool', 'date', 'signature', 'reference', 'tolerance', 'convert', 'stat')),
+                unit            TEXT,
+                required        INTEGER NOT NULL DEFAULT 0,
+                sort_order      INTEGER NOT NULL DEFAULT 0,
+                group_name      TEXT,
+                calc_type       TEXT,
+                calc_ref1_name  TEXT,
+                calc_ref2_name  TEXT,
+                calc_ref3_name  TEXT,
+                calc_ref4_name  TEXT,
+                calc_ref5_name  TEXT,
+                calc_ref6_name  TEXT,
+                calc_ref7_name  TEXT,
+                calc_ref8_name  TEXT,
+                calc_ref9_name  TEXT,
+                calc_ref10_name TEXT,
+                tolerance       REAL,
+                autofill_from_first_group INTEGER NOT NULL DEFAULT 0,
+                default_value   TEXT,
+                tolerance_type  TEXT,
+                tolerance_equation TEXT,
+                nominal_value   TEXT,
+                tolerance_lookup_json TEXT,
+                sig_figs        INTEGER DEFAULT 3
+            )
+            """
+        )
+        sel_cols = [c for c in old_cols if c in (
+            "id", "template_id", "name", "label", "data_type", "unit", "required", "sort_order",
+            "group_name", "calc_type", "calc_ref1_name", "calc_ref2_name", "calc_ref3_name",
+            "calc_ref4_name", "calc_ref5_name", "tolerance", "autofill_from_first_group",
+            "default_value", "tolerance_type", "tolerance_equation", "nominal_value", "tolerance_lookup_json", "sig_figs"
+        )]
+        sel_list = ", ".join(sel_cols)
+        ins_list = ", ".join(sel_cols)
+        cur.execute(
+            f"INSERT INTO calibration_template_fields_new ({ins_list}) SELECT {ins_list} FROM calibration_template_fields"
+        )
+        cur.execute("DROP TABLE calibration_template_fields")
+        cur.execute("ALTER TABLE calibration_template_fields_new RENAME TO calibration_template_fields")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_template_id ON calibration_template_fields(template_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_sort_order ON calibration_template_fields(template_id, sort_order)")
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    logger.info("Migration 10 applied: added 'stat' type and calc_ref6..calc_ref10_name to calibration_template_fields")
+
+
+def migrate_11_add_ref11_ref12(conn: sqlite3.Connection) -> None:
+    """Add calc_ref11_name and calc_ref12_name for equation variables (val11, val12)."""
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(calibration_template_fields)")
+    cols = [r[1] for r in cur.fetchall()]
+    for ref_col in ("calc_ref11_name", "calc_ref12_name"):
+        if ref_col not in cols:
+            cur.execute(f"ALTER TABLE calibration_template_fields ADD COLUMN {ref_col} TEXT")
+    conn.commit()
+    logger.info("Migration 11 applied: added calc_ref11_name, calc_ref12_name to calibration_template_fields")
+
+
+def migrate_12_add_stat_value_group(conn: sqlite3.Connection) -> None:
+    """Add stat_value_group: for stat type, which group's fields to use for val1..val12 selection."""
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(calibration_template_fields)")
+    cols = [r[1] for r in cur.fetchall()]
+    if "stat_value_group" not in cols:
+        cur.execute("ALTER TABLE calibration_template_fields ADD COLUMN stat_value_group TEXT")
+    conn.commit()
+    logger.info("Migration 12 applied: added stat_value_group to calibration_template_fields")
+
+
+def migrate_13_add_plot_type(conn: sqlite3.Connection) -> None:
+    """Add 'plot' to data_type CHECK and plot_* columns for chart axis names, title, range, and best-fit option."""
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(calibration_template_fields)")
+    old_cols = [r[1] for r in cur.fetchall()]
+    if "plot_x_axis_name" in old_cols:
+        return  # already applied
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        cur.execute(
+            """
+            CREATE TABLE calibration_template_fields_new (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id     INTEGER NOT NULL REFERENCES calibration_templates(id) ON DELETE CASCADE,
+                name            TEXT NOT NULL,
+                label           TEXT NOT NULL,
+                data_type       TEXT NOT NULL CHECK (data_type IN ('text', 'number', 'bool', 'date', 'signature', 'reference', 'tolerance', 'convert', 'stat', 'plot')),
+                unit            TEXT,
+                required        INTEGER NOT NULL DEFAULT 0,
+                sort_order      INTEGER NOT NULL DEFAULT 0,
+                group_name      TEXT,
+                calc_type       TEXT,
+                calc_ref1_name  TEXT,
+                calc_ref2_name  TEXT,
+                calc_ref3_name  TEXT,
+                calc_ref4_name  TEXT,
+                calc_ref5_name  TEXT,
+                calc_ref6_name  TEXT,
+                calc_ref7_name  TEXT,
+                calc_ref8_name  TEXT,
+                calc_ref9_name  TEXT,
+                calc_ref10_name TEXT,
+                calc_ref11_name TEXT,
+                calc_ref12_name TEXT,
+                tolerance       REAL,
+                autofill_from_first_group INTEGER NOT NULL DEFAULT 0,
+                default_value   TEXT,
+                tolerance_type  TEXT,
+                tolerance_equation TEXT,
+                nominal_value   TEXT,
+                tolerance_lookup_json TEXT,
+                sig_figs        INTEGER DEFAULT 3,
+                stat_value_group TEXT,
+                plot_x_axis_name TEXT,
+                plot_y_axis_name TEXT,
+                plot_title      TEXT,
+                plot_x_min      REAL,
+                plot_x_max      REAL,
+                plot_y_min      REAL,
+                plot_y_max      REAL,
+                plot_best_fit   INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        sel_cols = [c for c in old_cols if c in (
+            "id", "template_id", "name", "label", "data_type", "unit", "required", "sort_order",
+            "group_name", "calc_type", "calc_ref1_name", "calc_ref2_name", "calc_ref3_name",
+            "calc_ref4_name", "calc_ref5_name", "calc_ref6_name", "calc_ref7_name", "calc_ref8_name",
+            "calc_ref9_name", "calc_ref10_name", "calc_ref11_name", "calc_ref12_name",
+            "tolerance", "autofill_from_first_group", "default_value", "tolerance_type",
+            "tolerance_equation", "nominal_value", "tolerance_lookup_json", "sig_figs", "stat_value_group"
+        )]
+        ins_list = ", ".join(sel_cols)
+        cur.execute(
+            f"INSERT INTO calibration_template_fields_new ({ins_list}) SELECT {ins_list} FROM calibration_template_fields"
+        )
+        cur.execute("DROP TABLE calibration_template_fields")
+        cur.execute("ALTER TABLE calibration_template_fields_new RENAME TO calibration_template_fields")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_template_id ON calibration_template_fields(template_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_sort_order ON calibration_template_fields(template_id, sort_order)")
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    logger.info("Migration 13 applied: added 'plot' type and plot_* columns to calibration_template_fields")
+
+
+def migrate_14_add_non_affected_date_type(conn: sqlite3.Connection) -> None:
+    """Add 'non_affected_date' to data_type CHECK. Date field not synced from Cal date at bottom."""
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(calibration_template_fields)")
+    old_cols = [r[1] for r in cur.fetchall()]
+    # Check if already applied (schema version may not be set if we only change CHECK)
+    cur.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='calibration_template_fields'"
+    )
+    row = cur.fetchone()
+    if row and row[0] and "non_affected_date" in (row[0] or ""):
+        return
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        cur.execute(
+            """
+            CREATE TABLE calibration_template_fields_new (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id     INTEGER NOT NULL REFERENCES calibration_templates(id) ON DELETE CASCADE,
+                name            TEXT NOT NULL,
+                label           TEXT NOT NULL,
+                data_type       TEXT NOT NULL CHECK (data_type IN ('text', 'number', 'bool', 'date', 'signature', 'reference', 'tolerance', 'convert', 'stat', 'plot', 'non_affected_date')),
+                unit            TEXT,
+                required        INTEGER NOT NULL DEFAULT 0,
+                sort_order      INTEGER NOT NULL DEFAULT 0,
+                group_name      TEXT,
+                calc_type       TEXT,
+                calc_ref1_name  TEXT,
+                calc_ref2_name  TEXT,
+                calc_ref3_name  TEXT,
+                calc_ref4_name  TEXT,
+                calc_ref5_name  TEXT,
+                calc_ref6_name  TEXT,
+                calc_ref7_name  TEXT,
+                calc_ref8_name  TEXT,
+                calc_ref9_name  TEXT,
+                calc_ref10_name TEXT,
+                calc_ref11_name TEXT,
+                calc_ref12_name TEXT,
+                tolerance       REAL,
+                autofill_from_first_group INTEGER NOT NULL DEFAULT 0,
+                default_value   TEXT,
+                tolerance_type  TEXT,
+                tolerance_equation TEXT,
+                nominal_value   TEXT,
+                tolerance_lookup_json TEXT,
+                sig_figs        INTEGER DEFAULT 3,
+                stat_value_group TEXT,
+                plot_x_axis_name TEXT,
+                plot_y_axis_name TEXT,
+                plot_title      TEXT,
+                plot_x_min      REAL,
+                plot_x_max      REAL,
+                plot_y_min      REAL,
+                plot_y_max      REAL,
+                plot_best_fit   INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        ins_list = ", ".join(old_cols)
+        cur.execute(
+            f"INSERT INTO calibration_template_fields_new ({ins_list}) SELECT {ins_list} FROM calibration_template_fields"
+        )
+        cur.execute("DROP TABLE calibration_template_fields")
+        cur.execute("ALTER TABLE calibration_template_fields_new RENAME TO calibration_template_fields")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_template_id ON calibration_template_fields(template_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_sort_order ON calibration_template_fields(template_id, sort_order)")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    logger.info("Migration 14 applied: added 'non_affected_date' type to calibration_template_fields")
+
+
+def migrate_15_add_field_header_type(conn: sqlite3.Connection) -> None:
+    """Add 'field_header' to data_type CHECK. Display-only header for the group it is assigned to."""
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='calibration_template_fields'"
+    )
+    row = cur.fetchone()
+    if row and row[0] and "field_header" in (row[0] or ""):
+        return
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        cur.execute("PRAGMA table_info(calibration_template_fields)")
+        old_cols = [r[1] for r in cur.fetchall()]
+        cur.execute(
+            """
+            CREATE TABLE calibration_template_fields_new (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id     INTEGER NOT NULL REFERENCES calibration_templates(id) ON DELETE CASCADE,
+                name            TEXT NOT NULL,
+                label           TEXT NOT NULL,
+                data_type       TEXT NOT NULL CHECK (data_type IN ('text', 'number', 'bool', 'date', 'signature', 'reference', 'tolerance', 'convert', 'stat', 'plot', 'non_affected_date', 'field_header')),
+                unit            TEXT,
+                required        INTEGER NOT NULL DEFAULT 0,
+                sort_order      INTEGER NOT NULL DEFAULT 0,
+                group_name      TEXT,
+                calc_type       TEXT,
+                calc_ref1_name  TEXT,
+                calc_ref2_name  TEXT,
+                calc_ref3_name  TEXT,
+                calc_ref4_name  TEXT,
+                calc_ref5_name  TEXT,
+                calc_ref6_name  TEXT,
+                calc_ref7_name  TEXT,
+                calc_ref8_name  TEXT,
+                calc_ref9_name  TEXT,
+                calc_ref10_name TEXT,
+                calc_ref11_name TEXT,
+                calc_ref12_name TEXT,
+                tolerance       REAL,
+                autofill_from_first_group INTEGER NOT NULL DEFAULT 0,
+                default_value   TEXT,
+                tolerance_type  TEXT,
+                tolerance_equation TEXT,
+                nominal_value   TEXT,
+                tolerance_lookup_json TEXT,
+                sig_figs        INTEGER DEFAULT 3,
+                stat_value_group TEXT,
+                plot_x_axis_name TEXT,
+                plot_y_axis_name TEXT,
+                plot_title      TEXT,
+                plot_x_min      REAL,
+                plot_x_max      REAL,
+                plot_y_min      REAL,
+                plot_y_max      REAL,
+                plot_best_fit   INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        ins_list = ", ".join(old_cols)
+        cur.execute(
+            f"INSERT INTO calibration_template_fields_new ({ins_list}) SELECT {ins_list} FROM calibration_template_fields"
+        )
+        cur.execute("DROP TABLE calibration_template_fields")
+        cur.execute("ALTER TABLE calibration_template_fields_new RENAME TO calibration_template_fields")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_template_id ON calibration_template_fields(template_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_sort_order ON calibration_template_fields(template_id, sort_order)")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    logger.info("Migration 15 applied: added 'field_header' type to calibration_template_fields")
+
+
 def _migration_lock_path(db_path) -> "Path | None":
     """Path to advisory lock file next to the database."""
     if db_path is None:
@@ -397,3 +788,35 @@ def _run_migrations_impl(conn: sqlite3.Connection) -> None:
     if version < 7:
         migrate_7_add_tolerance_type(conn)
         set_schema_version(conn, 7)
+        version = 7
+    if version < 8:
+        migrate_8_add_convert_type(conn)
+        set_schema_version(conn, 8)
+        version = 8
+    if version < 9:
+        migrate_9_add_sig_figs(conn)
+        set_schema_version(conn, 9)
+        version = 9
+    if version < 10:
+        migrate_10_add_stat_type_and_ref6_ref10(conn)
+        set_schema_version(conn, 10)
+        version = 10
+    if version < 11:
+        migrate_11_add_ref11_ref12(conn)
+        set_schema_version(conn, 11)
+        version = 11
+    if version < 12:
+        migrate_12_add_stat_value_group(conn)
+        set_schema_version(conn, 12)
+        version = 12
+    if version < 13:
+        migrate_13_add_plot_type(conn)
+        set_schema_version(conn, 13)
+        version = 13
+    if version < 14:
+        migrate_14_add_non_affected_date_type(conn)
+        set_schema_version(conn, 14)
+        version = 14
+    if version < 15:
+        migrate_15_add_field_header_type(conn)
+        set_schema_version(conn, 15)
