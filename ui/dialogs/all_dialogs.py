@@ -2765,10 +2765,11 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         self.details_label.setToolTip("Pass/fail per tolerance point. Ref labels and values shown for each point.")
         layout.addWidget(self.details_label)
         self.details_table = QtWidgets.QTableWidget()
-        self.details_table.setColumnCount(4)
-        self.details_table.setHorizontalHeaderLabels(["Point", "Value", "Tolerance", "Result"])
-        self.details_table.horizontalHeader().setStretchLastSection(True)
+        self.details_table.setColumnCount(3)
+        self.details_table.setHorizontalHeaderLabels(["Point", "Tolerance", "Result"])
+        self.details_table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
         self.details_table.setAlternatingRowColors(False)  # we color by group
+        self.details_table.setWordWrap(False)
         self.details_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.details_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         layout.addWidget(self.details_table, 1)  # stretch so table takes space
@@ -3647,20 +3648,25 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
             else:
                 msg = "No tolerance (pass/fail) values recorded for this calibration.\n\nTemplates must have equation or boolean tolerance fields (or tolerance on number/computed fields) to show results here."
             self.details_table.setItem(0, 0, QtWidgets.QTableWidgetItem(msg))
-            self.details_table.setSpan(0, 0, 1, 4)
+            self.details_table.setSpan(0, 0, 1, 3)
             self.details_notes_label.setText("")
         else:
             self.details_table.setRowCount(len(table_rows))
             pass_brush = QtGui.QBrush(QtGui.QColor(220, 255, 220))   # light green
             fail_brush = QtGui.QBrush(QtGui.QColor(255, 220, 220))   # light red
+            black_brush = QtGui.QBrush(QtCore.Qt.black)
+
             for r, row in enumerate(table_rows):
                 failed = group_failed.get(row["group"], False) if row["group"] else None
-                for c, key in enumerate(["point", "value", "tolerance", "result"]):
+                for c, key in enumerate(["point", "value", "result"]):
                     item = QtWidgets.QTableWidgetItem(row.get(key, ""))
+                    item.setTextAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
                     if failed is not None:
                         item.setBackground(fail_brush if failed else pass_brush)
+                        item.setForeground(black_brush)
                     self.details_table.setItem(r, c, item)
             self.details_table.resizeRowsToContents()
+            self.details_table.resizeColumnsToContents()
             template_notes = (rec or {}).get("template_notes", "").strip()
             self.details_notes_label.setText(template_notes if template_notes else "")
 
