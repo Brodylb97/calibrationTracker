@@ -40,6 +40,33 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = SCRIPT_DIR / "update_config.json"
 CONFIG_PATH_ENV = "CALIBRATION_TRACKER_UPDATE_CONFIG"
 
+# Log file for diagnosing crashes when run without a console (e.g. from frozen exe)
+_UPDATER_LOG = None
+
+
+def _log(msg, also_stderr=True):
+    """Write a line to the updater log file and optionally to stderr."""
+    global _UPDATER_LOG
+    line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n"
+    if _UPDATER_LOG is None:
+        try:
+            log_path = Path(tempfile.gettempdir()) / "CalibrationTracker_updater.log"
+            _UPDATER_LOG = open(log_path, "a", encoding="utf-8")
+        except Exception:
+            _UPDATER_LOG = False
+    if _UPDATER_LOG and _UPDATER_LOG is not True:
+        try:
+            _UPDATER_LOG.write(line)
+            _UPDATER_LOG.flush()
+        except Exception:
+            pass
+    if also_stderr:
+        try:
+            sys.stderr.write(line)
+            sys.stderr.flush()
+        except Exception:
+            pass
+
 
 def load_config(config_path=None):
     """Load update configuration from JSON. Path from env or default."""
@@ -288,15 +315,20 @@ def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=
     if wait_pid is not None:
         try:
             pid = int(wait_pid)
+            _log("Waiting for process %s to exit..." % pid)
             deadline = time.time() + 60
             while time.time() < deadline:
                 try:
                     os.kill(pid, 0)
                 except OSError:
+                    _log("Process %s has exited." % pid)
                     break
                 time.sleep(0.5)
             else:
-                print("Timeout waiting for process to exit.", file=sys.stderr)
+                _log("Timeout waiting for process %s to exit; aborting update." % pid)
+                raise RuntimeError(
+                    "The application did not close in time. Please close it manually and try Update again."
+                )
         except (ValueError, TypeError):
             pass
 
@@ -341,18 +373,22 @@ def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=
     zip_path = temp_dir / "update.zip"
 
     try:
-        print("Downloading update...")
+        _log("Downloading update from %s" % (remote_package_url[:80] + "..." if len(remote_package_url) > 80 else remote_package_url))
         download_file(remote_package_url, zip_path)
+        _log("Download complete.")
 
-        print("Creating backup...")
+        _log("Creating backup...")
         backup_path = backup_app_directory(app_dir, backup_parent_dir=Path(tempfile.gettempdir()))
+        _log("Backup created: %s" % backup_path)
 
         # Exclude db, logs, backups, and config from overwrite to avoid data loss
+        _log("Extracting and replacing files...")
         replace_with_extracted(
             zip_path,
             app_dir,
             exclude_patterns=["*.db", "*.db-journal", "*.db-wal", "*.db-shm", "logs", "backups", "update_config.json", ".update_temp"],
         )
+        _log("Replace complete.")
 
         # Persist new version if we have it (prefer resolved release version)
         try:
@@ -445,6 +481,7 @@ def _try_relaunch_elevated(args):
 
 
 def main():
+    global _UPDATER_LOG
     parser = argparse.ArgumentParser(description="Calibration Tracker – automated update script")
     parser.add_argument("--config", type=Path, help="Path to update_config.json")
     parser.add_argument("--wait-pid", type=int, metavar="PID", help="Wait for this process ID to exit before updating")
@@ -454,14 +491,19 @@ def main():
     parser.add_argument("--elevated", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
+    _log("Updater started (pid=%s, cwd=%s)" % (os.getpid(), os.getcwd()))
+
     try:
         if sys.platform == "win32" and not getattr(args, "elevated", False):
             try:
                 if _try_relaunch_elevated(args):
+                    _log("Relaunched elevated; exiting.")
                     sys.exit(0)
-            except Exception:
-                pass
+            except Exception as e:
+                _log("Relaunch elevated failed: %s" % e)
+        _log("Loading config (config=%s)" % (args.config or "default"))
         config = load_config(args.config)
+        _log("App dir: %s" % config["_app_dir_resolved"])
         run_update(
             config,
             wait_pid=args.wait_pid,
@@ -469,15 +511,37 @@ def main():
             restore_db_path=getattr(args, "restore_db", None),
             no_restart=getattr(args, "no_restart", False),
         )
+        _log("Update completed successfully.")
+        if _UPDATER_LOG and _UPDATER_LOG is not True:
+            try:
+                _UPDATER_LOG.close()
+            except Exception:
+                pass
+            _UPDATER_LOG = None
     except Exception as e:
+        import traceback
         err_msg = str(e)
-        print(f"Update failed: {err_msg}", file=sys.stderr)
+        tb = traceback.format_exc()
+        _log("Update failed: %s" % err_msg)
+        _log("Traceback:\n%s" % tb)
+        if _UPDATER_LOG and _UPDATER_LOG is not True:
+            try:
+                _UPDATER_LOG.close()
+            except Exception:
+                pass
+            _UPDATER_LOG = None
+        try:
+            print(f"Update failed: {err_msg}", file=sys.stderr)
+            print(tb, file=sys.stderr)
+        except Exception:
+            pass
         if sys.platform == "win32":
             try:
                 import ctypes
+                log_hint = "\nSee %TEMP%\\CalibrationTracker_updater.log for details."
                 ctypes.windll.user32.MessageBoxW(
                     None,
-                    f"Update failed:\n\n{err_msg}",
+                    "Update failed:\n\n%s%s" % (err_msg, log_hint),
                     "Calibration Tracker – Update Failed",
                     0x10,  # MB_ICONERROR
                 )
