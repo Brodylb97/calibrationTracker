@@ -2767,7 +2767,10 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         self.details_table = QtWidgets.QTableWidget()
         self.details_table.setColumnCount(3)
         self.details_table.setHorizontalHeaderLabels(["Point", "Tolerance", "Result"])
-        self.details_table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeToContents)
+        header = self.details_table.horizontalHeader()
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)   # Point
+        header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)            # Tolerance - fills remaining space
+        header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)   # Result
         self.details_table.setAlternatingRowColors(False)  # we color by group
         self.details_table.setWordWrap(False)
         self.details_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
@@ -3666,7 +3669,6 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                         item.setForeground(black_brush)
                     self.details_table.setItem(r, c, item)
             self.details_table.resizeRowsToContents()
-            self.details_table.resizeColumnsToContents()
             template_notes = (rec or {}).get("template_notes", "").strip()
             self.details_notes_label.setText(template_notes if template_notes else "")
 
