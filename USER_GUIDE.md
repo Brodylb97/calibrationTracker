@@ -272,19 +272,21 @@ The file will be attached to the calibration record and can be viewed later.
 
 1. Select an instrument in the table
 2. Click **History** in the toolbar (or press `Ctrl+H`, or right-click and choose **Cal History**)
-3. The dialog shows:
-   - List of all calibration records for the instrument
-   - Details panel showing:
-     - Calibration date and metadata
-     - All field values and difference calculations
-     - Template notes (if using a template)
-     - Attached files (if any)
+3. The dialog opens at approximately 80% of the screen and shows:
+   - List of all calibration records for the instrument (Date, Template, Performed by, Result, State)
+   - **Show archived**: Check to include archived (soft-deleted) records
+   - **Tolerance values table**: When a record is selected, a table shows pass/fail per point:
+     - **Point**: Calibration point (ref labels and values)
+     - **Tolerance**: Measured or computed value
+     - **Result**: PASS or FAIL for that point
+     - **Group highlighting**: Rows are colored green if all points in the group pass, red if any point fails
+   - Template notes (if present) appear below the table
 4. Actions available:
    - **New**: Create a new calibration record
    - **View/Edit**: View or edit the selected calibration
    - **Export PDF**: Export the selected calibration to PDF
    - **Open File**: Open attached calibration file
-   - **Delete**: Delete the calibration record
+   - **Delete**: Archive or permanently delete the calibration record
 
 ### Editing a Calibration Record
 

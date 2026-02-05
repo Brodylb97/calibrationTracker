@@ -17,7 +17,7 @@
 
 - **PDF “no plot” message:** Keep the existing message clear and user-facing; optionally add a short plot-equation/ref hint in the field editor tooltip.
 - **Instrument Flag:** Add a tooltip on the Flag column: e.g. “Shows ⚠ Fail when the most recent calibration failed. Use ‘Last cal failed’ in Needs Attention to filter.”
-- **Calibration History:** Add a short tooltip on “Tolerance values (pass/fail)”: e.g. “Pass/fail per point; ref labels and values shown.”
+- **Calibration History:** Implemented. Tolerance table (Point, Tolerance, Result) with group highlighting (green/red); tooltip; dialog ~80% screen.
 
 ## Deferred
 
@@ -30,5 +30,5 @@
 1. Defensive checks in PDF export.
 2. `list_instruments` subquery fallback when `last_cal_result` fails.
 3. Logging in PDF export and calibration save.
-4. Tooltips for Flag column and Calibration History “Tolerance values”.
+4. Tooltips for Flag column and Calibration History tolerance table (done).
 5. Document plot equation exceptions; optional `vars_map` guard in `evaluate_plot_equation`.

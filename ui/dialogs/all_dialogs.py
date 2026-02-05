@@ -2762,7 +2762,7 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
 
         # Details area: tolerance values as table, pass/fail per point; groups highlighted green/red
         self.details_label = QtWidgets.QLabel("Tolerance values (pass/fail):")
-        self.details_label.setToolTip("Pass/fail per tolerance point. Ref labels and values shown for each point.")
+        self.details_label.setToolTip("Pass/fail per tolerance point. Point, Tolerance, and Result columns. Groups highlighted green (pass) or red (fail).")
         layout.addWidget(self.details_label)
         self.details_table = QtWidgets.QTableWidget()
         self.details_table.setColumnCount(3)

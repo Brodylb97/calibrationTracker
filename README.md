@@ -5,6 +5,7 @@ A desktop application for managing instrument calibrations: track instruments, r
 ## Features
 
 - **Instrument management** — ID, location, type, serial number, next due date, status
+- **Calibration history** — Full history per instrument; tolerance table with pass/fail per point; groups highlighted green (pass) or red (fail)
 - **Calibration records** — Templates with custom fields, signatures, autofill, statistical functions (LINEST, STDEV, MEDIAN, etc.), and external-file attachments
 - **Visual indicators** — Color-coded table for overdue, upcoming due dates, and last calibration failed (bright green); Needs Attention quick filters (Overdue, Due soon, Recently modified, Last cal failed)
 - **Export** — Current view to CSV; single calibration or all calibrations to PDF (instrument info, template, values; AHI logo on in-house exports)

@@ -258,22 +258,26 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
             "Calibration History",
             """
             <h3>Viewing Calibration History</h3>
-            <p>View all calibration records for an instrument.</p>
+            <p>View all calibration records for an instrument. The dialog opens at approximately 80% of the screen size.</p>
             
-            <h4>Table View:</h4>
+            <h4>Records Table:</h4>
             <ul>
                 <li>Shows all calibration records with date, template, performed by, and result</li>
-                <li>Select a record to view detailed information below</li>
+                <li>Select a record to view tolerance details below</li>
+                <li><b>Show archived</b>: Include archived (soft-deleted) records in the list</li>
             </ul>
             
-            <h4>Details Panel:</h4>
+            <h4>Tolerance Values Table:</h4>
+            <p>When a record is selected, the details area shows a table of tolerance (pass/fail) results:</p>
             <ul>
-                <li>Shows calculated values and bool pass/fail per calibration point</li>
-                <li>Displays template notes (if applicable)</li>
-                <li>Shows all field values from the calibration</li>
+                <li><b>Point</b>: Calibration point (ref labels and values)</li>
+                <li><b>Tolerance</b>: Measured or computed value for that point</li>
+                <li><b>Result</b>: PASS or FAIL for that point</li>
+                <li><b>Group highlighting</b>: Rows are colored by group — green if all points in the group pass, red if any point fails</li>
+                <li>Template notes appear below the table when present</li>
             </ul>
             
-            <h4>Table Columns:</h4>
+            <h4>Records Table Columns:</h4>
             <ul>
                 <li><b>Date</b>: Calibration date</li>
                 <li><b>Template</b>: Template used for the calibration</li>
@@ -288,12 +292,12 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
                 <li><b>✏️ View/Edit</b>: View or edit the selected calibration</li>
                 <li><b>📄 Export PDF</b>: Export the selected calibration to PDF</li>
                 <li><b>📎 Open File</b>: Open attached calibration file (if any)</li>
-                <li><b>🗑️ Delete</b>: Delete the selected calibration record (Archive or Delete permanently)</li>
+                <li><b>🗑️ Delete</b>: Archive or permanently delete the selected calibration record</li>
             </ul>
             
             <h4>Tips:</h4>
             <ul>
-                <li>Use the details panel to review calibration data</li>
+                <li>Use the tolerance table to quickly spot failing groups (red rows)</li>
                 <li>Export important calibrations to PDF for archival</li>
                 <li>Attached files can be opened directly from here</li>
             </ul>

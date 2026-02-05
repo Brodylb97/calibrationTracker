@@ -11,7 +11,7 @@
 Recent work addressed:
 
 - **PDF plot export**: Plot rendering when groups have no table columns; vars_map from `record_values_by_name`; page break after plot when a non-Signature group follows; matplotlib/numpy-only rendering.
-- **Calibration History**: Tolerance values show ref labels and values instead of group name; plot equation validation catches `SyntaxError`.
+- **Calibration History**: Tolerance values shown in table (Point, Tolerance, Result) with group highlighting (green/red); dialog ~80% screen; plot equation validation catches `SyntaxError`.
 - **Instrument list**: Flagging for instruments whose most recent calibration failed (column + filter + row styling).
 
 The codebase already has: global excepthook and `crash_log`, database integrity check on startup, PDF export in a worker thread with progress and cancel, and solid filter/sort in the instrument table.
@@ -88,13 +88,14 @@ The codebase already has: global excepthook and `crash_log`, database integrity 
 
 ---
 
-### 2.3 Calibration History — “Tolerance values” label
+### 2.3 Calibration History — Tolerance values (implemented)
 
-**Risk:** None. **Effort:** Trivial.
+**Status:** Implemented.
 
-- The details area label is “Tolerance values (pass/fail)”. Optionally add a short tooltip: “Pass/fail per tolerance point. Ref labels and values shown for each point.”
-
-**Why:** Aligns expectations with the new display (ref labels + values instead of group name).
+- The details area shows a **table** with columns: Point, Tolerance, Result.
+- Groups are highlighted green (all pass) or red (any fail).
+- Tooltip on the label explains the table and highlighting.
+- Dialog opens at ~80% of screen size.
 
 ---
 
@@ -119,7 +120,7 @@ The codebase already has: global excepthook and `crash_log`, database integrity 
 | 1 | Defensive checks in PDF export (`_vars_map_for_plot`, `_render_plot_to_png`, group iteration) | Stability |
 | 2 | `list_instruments` subquery fallback when last_cal_result fails | Stability |
 | 3 | Logging in PDF export (plot skipped) and calibration save (failure context) | Stability |
-| 4 | Tooltip for Flag column; tooltip/label for Calibration History “Tolerance values” | UX |
+| 4 | Tooltip for Flag column; Calibration History tolerance table (done) | UX |
 | 5 | Document `SyntaxError` + `ValueError` for plot equation; optional `vars_map` guard in `evaluate_plot_equation` | Stability |
 
 ---
