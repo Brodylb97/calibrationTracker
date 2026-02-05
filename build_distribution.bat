@@ -78,5 +78,6 @@ echo.
 echo Next steps:
 echo   For installer: run build_executable.bat, then compile CalibrationTracker.iss in Inno Setup.
 echo   (Or run build_installer.bat to do exe + Inno in one go.)
+echo   For in-app updates: run build_update_package.py, then upload installer\CalibrationTracker-windows.zip to GitHub Releases.
 echo.
 pause

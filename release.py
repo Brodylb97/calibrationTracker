@@ -162,13 +162,14 @@ def main() -> None:
     else:
         run_cmd([str(iscc), str(ISS_FILE)], "4. Build installer")
 
-    # 5. Git commit
+    # 5. Git commit (version + installer script + migrations so tag has full schema)
     if args.no_commit:
         print("\n--- 5. Git commit ---")
         print("Skipped (--no-commit).")
     else:
         print("\n--- 5. Git commit ---")
-        run_cmd(["git", "add", str(VERSION_FILE), str(ISS_FILE)], "  git add")
+        to_add = [p for p in (VERSION_FILE, ISS_FILE, SCRIPT_DIR / "migrations.py") if p.exists()]
+        run_cmd(["git", "add"] + [str(p) for p in to_add], "  git add")
         r = subprocess.run(
             ["git", "commit", "-m", f"v{version}"],
             cwd=SCRIPT_DIR,
@@ -190,7 +191,13 @@ def main() -> None:
     print("  - Update zip: installer\\CalibrationTracker-windows.zip")
     if iscc:
         print("  - Installer:  installer\\CalibrationTracker_Setup.exe")
-    print("  Next: create GitHub Release, upload the zip, then git push if desired.")
+    print("")
+    print("REQUIRED for in-app updates to see this version:")
+    print("  1. Create a new GitHub Release for v" + version)
+    print("  2. Upload installer\\CalibrationTracker-windows.zip as asset name: CalibrationTracker-windows.zip")
+    print("  3. Push your commits (and tag if you use tags)")
+    print("")
+    print("Without uploading the zip, users who click 'Check for Updates' will not get the new build.")
     print("========================================")
 
 

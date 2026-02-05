@@ -57,8 +57,12 @@ def main():
                 zf.write(f, f"Signatures/{f.name}")
 
     print(f"Created: {OUTPUT_ZIP}")
-    print("Upload this file to GitHub Releases as asset name: CalibrationTracker-windows.zip")
-    print("URL will be: https://github.com/Brodylb97/calibrationTracker/releases/latest/download/CalibrationTracker-windows.zip")
+    print("")
+    print("REQUIRED for in-app 'Check for Updates' to deliver this build:")
+    print("  1. Create a new GitHub Release (tag version to match VERSION file)")
+    print("  2. Upload this file as asset name exactly: CalibrationTracker-windows.zip")
+    print("  URL will be: https://github.com/Brodylb97/calibrationTracker/releases/latest/download/CalibrationTracker-windows.zip")
+    print("  Without uploading, users will not receive this update when they click Update.")
 
 
 if __name__ == "__main__":

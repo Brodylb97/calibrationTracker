@@ -68,7 +68,9 @@ echo Executable location: dist\CalibrationTracker.exe
 echo ========================================
 echo.
 echo Next steps:
-echo 1. Test the executable
-echo 2. Create installer using Inno Setup with CalibrationTracker.iss
+echo 1. Test the executable (includes all code + migrations; DB updates on first run)
+echo 2. Run build_update_package.py to create installer\CalibrationTracker-windows.zip
+echo 3. Create GitHub Release and UPLOAD the zip so in-app updater can deliver this build
+echo 4. Create installer using Inno Setup with CalibrationTracker.iss (or run build_installer.bat)
 echo.
 pause

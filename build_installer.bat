@@ -39,6 +39,8 @@ if defined ISCC (
     echo ========================================
     echo Installer built: installer\CalibrationTracker_Setup.exe
     echo ========================================
+    echo.
+    echo For in-app updates: run build_update_package.py, then upload installer\CalibrationTracker-windows.zip to GitHub Releases.
 ) else (
     echo Inno Setup compiler (ISCC) not found on PATH or in default install.
     echo Open CalibrationTracker.iss in Inno Setup and compile manually (Build ^> Compile).
