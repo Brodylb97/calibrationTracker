@@ -10,8 +10,12 @@ embedded in the PDF. Notes at bottom.
 
 from pathlib import Path
 import io
+import logging
+import math
 import re
 from collections import OrderedDict
+
+logger = logging.getLogger(__name__)
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -159,7 +163,10 @@ def _vars_map_for_plot(
     """
     Build ref1..ref12 / val1..val12 for a plot field.
     Uses record_values_by_name (same source as stat/convert) with multiple key variants.
+    Returns empty dict if record_values_by_name or template data is missing to avoid TypeError.
     """
+    if record_values_by_name is None or not isinstance(record_values_by_name, dict):
+        return {}
     vars_map = {}
     for i in range(1, 13):
         ref_name = (tf.get(f"calc_ref{i}_name") or "").strip()
@@ -198,6 +205,7 @@ def _render_plot_to_png(
     """
     Render a scatter plot (and optional line of best fit) with matplotlib.
     Returns PNG bytes for embedding in the PDF. Uses numpy for linear fit (no pandas/sklearn required).
+    Skips non-finite values (nan, inf) to avoid numpy errors.
     """
     import matplotlib  # type: ignore[import-untyped]
     matplotlib.use("Agg")
@@ -206,6 +214,12 @@ def _render_plot_to_png(
 
     if not xs or not ys or len(xs) != len(ys):
         return b""
+    # Filter out non-finite values to avoid numpy errors
+    pairs = [(x, y) for x, y in zip(xs, ys) if math.isfinite(x) and math.isfinite(y)]
+    if not pairs:
+        logger.info("Plot skipped: all values are non-finite (nan/inf)")
+        return b""
+    xs, ys = zip(*pairs)
     x_arr = np.array(xs, dtype=float)
     y_arr = np.array(ys, dtype=float)
     fig, ax = plt.subplots(figsize=(5, 4))
@@ -574,6 +588,7 @@ def export_calibration_to_pdf(repo, rec_id: int, output_path: str | Path) -> Non
         pass
 
     # Iterate groups in template order so stat-only (and convert-only) groups are included even when they have no stored value rows
+    template_fields = template_fields or []
     template_fields_sorted = sorted(template_fields, key=lambda x: (x.get("sort_order") or 0, x.get("id") or 0))
     template_group_order = []
     seen_groups = set()
@@ -874,6 +889,7 @@ def export_calibration_to_pdf(repo, rec_id: int, output_path: str | Path) -> Non
                     eq = (tf.get("tolerance_equation") or "").strip()
                     if not eq:
                         _plot_last_error = "Plot field has no equation. Set PLOT([x refs], [y refs]) in the field editor."
+                        logger.info("Plot skipped for record %s: %s", rec.get("id"), _plot_last_error)
                         continue
                     vars_map = _vars_map_for_plot(
                         tf,
@@ -897,9 +913,11 @@ def export_calibration_to_pdf(repo, rec_id: int, output_path: str | Path) -> Non
                         except Exception:
                             pass
                         _plot_last_error = err_msg
+                        logger.info("Plot skipped for record %s: %s", rec.get("id"), err_msg)
                         continue
                     if not xs or not ys:
                         _plot_last_error = "Plot equation returned no data. Check that all val1–val12 refs are assigned to numeric fields."
+                        logger.info("Plot skipped for record %s: %s", rec.get("id"), _plot_last_error)
                         continue
                     try:
                         png_bytes = _render_plot_to_png(
@@ -916,6 +934,7 @@ def export_calibration_to_pdf(repo, rec_id: int, output_path: str | Path) -> Non
                         )
                     except Exception as ex:
                         _plot_last_error = str(ex)
+                        logger.info("Plot skipped for record %s: %s", rec.get("id"), ex)
                         continue
                     if png_bytes:
                         img_flowable = Image(io.BytesIO(png_bytes))

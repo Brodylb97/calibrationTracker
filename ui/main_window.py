@@ -252,42 +252,44 @@ class MainWindow(QtWidgets.QMainWindow):
         about_action.triggered.connect(self.on_show_about)
 
         # ------------------------------------------------------------------
-        # Needs Attention panel (overdue, due soon, recently modified)
+        # Needs Attention panel (overdue, due soon, recently modified, last cal failed)
         # ------------------------------------------------------------------
         self._needs_attention_container = QtWidgets.QWidget()
-        needs_layout = QtWidgets.QGridLayout(self._needs_attention_container)
+        needs_layout = QtWidgets.QHBoxLayout(self._needs_attention_container)
         needs_layout.setContentsMargins(8, 4, 8, 4)
-        needs_layout.setSpacing(6)
-        needs_layout.addWidget(QtWidgets.QLabel("Needs Attention:"), 0, 0)
+        needs_layout.setSpacing(8)
+        needs_layout.addWidget(QtWidgets.QLabel("Needs Attention:"))
         self._btn_overdue = QtWidgets.QPushButton("Overdue (0)")
         self._btn_overdue.setCheckable(True)
-        self._btn_overdue.setMinimumWidth(100)
+        self._btn_overdue.setMinimumWidth(95)
         self._btn_overdue.setToolTip("Show instruments past due date")
         self._btn_overdue.clicked.connect(self._on_needs_attention_overdue)
-        needs_layout.addWidget(self._btn_overdue, 0, 1)
+        needs_layout.addWidget(self._btn_overdue)
         self._btn_due_soon = QtWidgets.QPushButton("Due soon (0)")
         self._btn_due_soon.setCheckable(True)
-        self._btn_due_soon.setMinimumWidth(100)
+        self._btn_due_soon.setMinimumWidth(95)
         self._btn_due_soon.setToolTip("Show instruments due within 30 days")
         self._btn_due_soon.clicked.connect(self._on_needs_attention_due_soon)
-        needs_layout.addWidget(self._btn_due_soon, 0, 2)
+        needs_layout.addWidget(self._btn_due_soon)
         self._btn_recently_modified = QtWidgets.QPushButton("Recently modified (0)")
         self._btn_recently_modified.setCheckable(True)
         self._btn_recently_modified.setMinimumWidth(140)
         self._btn_recently_modified.setToolTip("Show instruments modified in the last 7 days")
         self._btn_recently_modified.clicked.connect(self._on_needs_attention_recently_modified)
-        needs_layout.addWidget(self._btn_recently_modified, 0, 3)
+        needs_layout.addWidget(self._btn_recently_modified)
         self._btn_failed = QtWidgets.QPushButton("Last cal failed (0)")
         self._btn_failed.setCheckable(True)
-        self._btn_failed.setMinimumWidth(120)
+        self._btn_failed.setMinimumWidth(115)
         self._btn_failed.setToolTip("Show instruments whose most recent calibration failed")
         self._btn_failed.clicked.connect(self._on_needs_attention_failed)
-        needs_layout.addWidget(self._btn_failed, 1, 0)
+        needs_layout.addWidget(self._btn_failed)
+        needs_layout.addSpacing(12)
         self._btn_clear_attention = QtWidgets.QPushButton("Clear")
-        self._btn_clear_attention.setMinimumWidth(60)
+        self._btn_clear_attention.setMinimumWidth(55)
         self._btn_clear_attention.setToolTip("Clear Needs Attention filter")
         self._btn_clear_attention.clicked.connect(self._on_needs_attention_clear)
-        needs_layout.addWidget(self._btn_clear_attention, 1, 1)
+        needs_layout.addWidget(self._btn_clear_attention)
+        needs_layout.addStretch(1)
         layout.addWidget(self._needs_attention_container)
 
         # ------------------------------------------------------------------
@@ -1199,10 +1201,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception:
                     pass
 
-        failed = sum(
-            1 for inst in instruments
-            if (str(inst.get("last_cal_result") or "").strip().upper() == "FAIL"
-        )
+        failed = sum(1 for inst in instruments if (str(inst.get("last_cal_result") or "").strip().upper() == "FAIL"))
 
         self.total_label.setText(f"Total: {total}")
         self.active_label.setText(f"Active: {active}")
@@ -1212,19 +1211,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _apply_statistics_colors(self):
         """Apply theme-derived colors to statistics labels."""
-        try:
-            colors = get_theme_colors(get_saved_theme())
-            accent = (colors or {}).get("ACCENT_ORANGE", "#FFD93D")
-        except Exception:
-            accent = "#FFD93D"
-        overdue_color = "#FF6B6B"  # Semantic warning red
+        overdue_color = "#FF9800"  # Orange
         self.overdue_label.setStyleSheet(
             f"padding: 4px 8px; border-radius: 3px; color: {overdue_color}; font-weight: bold;"
         )
+        due_soon_color = "#FFEB3B"  # Yellow for upcoming
         self.due_soon_label.setStyleSheet(
-            f"padding: 4px 8px; border-radius: 3px; color: {accent};"
+            f"padding: 4px 8px; border-radius: 3px; color: {due_soon_color};"
         )
-        failed_color = "#00E676"  # Bright green
+        failed_color = "#FF4444"  # Bright red for cal fails
         self.failed_label.setStyleSheet(
             f"padding: 4px 8px; border-radius: 3px; color: {failed_color}; font-weight: bold;"
         )

@@ -275,7 +275,12 @@ def _eval_node(node: ast.AST, vars_map: dict[str, float]) -> float:
 def parse_equation(equation: str) -> ast.Expression:
     """
     Parse tolerance equation string (Excel-like: + - * / ^ and ABS, MIN, MAX, ROUND).
-    Returns AST body. Raises ValueError on syntax error or disallowed construct.
+    Returns AST body.
+
+    Raises:
+        ValueError: On disallowed construct (attribute access, etc.) or empty equation.
+        SyntaxError: From ast.parse when input is incomplete (e.g. "val1 + ").
+    Callers should catch both ValueError and SyntaxError for incomplete or invalid input.
     """
     if not (equation or "").strip():
         raise ValueError("Equation is empty")
@@ -318,7 +323,11 @@ def parse_plot_equation(equation: str) -> tuple[list[str], list[str]]:
     Parse PLOT([x1, x2, ...], [y1, y2, ...]) equation.
     Returns (x_var_names, y_var_names). Each list contains variable names (val1, ref1, etc.).
     Total number of variables must be between 1 and 12.
-    Raises ValueError on syntax error or invalid form.
+
+    Raises:
+        ValueError: On invalid form (wrong structure, unknown variables, etc.).
+        SyntaxError: From ast.parse when input is incomplete (e.g. "PLOT([val1,").
+    Callers should catch both ValueError and SyntaxError for incomplete or invalid input.
     """
     if not (equation or "").strip():
         raise ValueError("Plot equation is empty")
@@ -359,11 +368,15 @@ def parse_plot_equation(equation: str) -> tuple[list[str], list[str]]:
     return (x_names, y_names)
 
 
-def evaluate_plot_equation(equation: str, vars_map: dict[str, float]) -> tuple[list[float], list[float]]:
+def evaluate_plot_equation(equation: str, vars_map: dict[str, float] | None) -> tuple[list[float], list[float]]:
     """
     Evaluate PLOT([x vars], [y vars]) with given vars_map (ref1/val1 etc.).
     Returns (x_values, y_values) as two lists of floats for charting.
+
+    If vars_map is None, treats it as an empty dict (callers will get "Variable not provided" for any ref).
     """
+    if vars_map is None:
+        vars_map = {}
     v = _ensure_val_aliases(dict(vars_map))
     x_names, y_names = parse_plot_equation(equation)
     xs = []

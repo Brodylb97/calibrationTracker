@@ -2,6 +2,8 @@
 
 *Safe, incremental improvements that build on recent fixes (PDF plot export, calibration history tolerance display, instrument failed-flag). No large refactors.*
 
+**Status: Implemented** (all items from the suggested order of work have been completed)
+
 ---
 
 ## Context

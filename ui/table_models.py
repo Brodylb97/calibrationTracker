@@ -100,6 +100,18 @@ class HighlightDelegate(QtWidgets.QStyledItemDelegate):
 
         painter.restore()
 
+    def helpEvent(self, event, view, option, index):
+        """Show tooltip for Flag column (column 9)."""
+        if index.isValid() and index.column() == 9:
+            QtWidgets.QToolTip.showText(
+                event.globalPos(),
+                "Shows ⚠ Fail when the most recent calibration for this instrument failed. "
+                "Use 'Last cal failed' in Needs Attention to filter.",
+                view,
+            )
+            return True
+        return super().helpEvent(event, view, option, index)
+
 
 class InstrumentTableModel(QtCore.QAbstractTableModel):
     """Table model for the instrument list."""
@@ -151,7 +163,7 @@ class InstrumentTableModel(QtCore.QAbstractTableModel):
             elif column == 8:
                 return inst.get("instrument_type_name") or ""
             elif column == 9:
-                return "Fail" if (inst.get("last_cal_result") or "").strip().upper() == "FAIL" else ""
+                return "Fail" if (str(inst.get("last_cal_result") or "").strip().upper()) == "FAIL" else ""
             return ""
 
         self.layoutAboutToBeChanged.emit()
@@ -176,28 +188,34 @@ class InstrumentTableModel(QtCore.QAbstractTableModel):
         inst = self.instruments[row]
 
         if role == QtCore.Qt.BackgroundRole:
-            last_failed = (inst.get("last_cal_result") or "").strip().upper() == "FAIL"
+            last_failed = (str(inst.get("last_cal_result") or "").strip().upper()) == "FAIL"
+            status = (inst.get("status") or "").strip().upper()
             days_left = self._days_left(inst)
             if last_failed:
-                return QtGui.QColor(35, 90, 50)  # Dark green background
+                return QtGui.QColor(90, 35, 35)  # Dark red background
+            if status == "OUT_FOR_CAL":
+                return QtGui.QColor(30, 50, 90)  # Dark blue background
             if days_left is not None:
                 if days_left < 0:
-                    return QtGui.QColor(80, 30, 30)
+                    return QtGui.QColor(80, 50, 20)  # Dark orange background
                 elif days_left <= 7:
-                    return QtGui.QColor(80, 70, 30)
+                    return QtGui.QColor(80, 70, 20)  # Dark yellow background
                 elif days_left <= 30:
-                    return QtGui.QColor(60, 50, 40)
+                    return QtGui.QColor(70, 65, 25)  # Dark amber background
             return None
 
         if role == QtCore.Qt.ForegroundRole:
-            last_failed = (inst.get("last_cal_result") or "").strip().upper() == "FAIL"
-            if last_failed:
-                return QtGui.QColor("#00E676")  # Bright green text
+            last_failed = (str(inst.get("last_cal_result") or "").strip().upper()) == "FAIL"
+            status = (inst.get("status") or "").strip().upper()
             days_left = self._days_left(inst)
+            if last_failed:
+                return QtGui.QColor("#FF4444")  # Bright red text
+            if status == "OUT_FOR_CAL":
+                return QtGui.QColor("#42A5F5")  # Bright blue text
             if days_left is not None and days_left < 0:
-                return QtGui.QColor("#FF6B6B")
-            elif days_left is not None and days_left <= 7:
-                return QtGui.QColor("#FFD93D")
+                return QtGui.QColor("#FF9800")  # Orange text
+            elif days_left is not None and days_left <= 30:
+                return QtGui.QColor("#FFEB3B")  # Yellow text
             return None
 
         if role == QtCore.Qt.DisplayRole:
@@ -221,7 +239,7 @@ class InstrumentTableModel(QtCore.QAbstractTableModel):
             elif col == 8:
                 return inst.get("instrument_type_name", "") or ""
             elif col == 9:
-                return "\u26A0 Fail" if (inst.get("last_cal_result") or "").strip().upper() == "FAIL" else ""
+                return "\u26A0 Fail" if (str(inst.get("last_cal_result") or "").strip().upper()) == "FAIL" else ""
         return None
 
     def headerData(self, section, orientation, role=QtCore.Qt.DisplayRole):
@@ -340,7 +358,7 @@ class InstrumentFilterProxyModel(QtCore.QSortFilterProxyModel):
             src = self.sourceModel()
             if hasattr(src, "get_instrument_at_row"):
                 inst = src.get_instrument_at_row(source_row)
-                if not inst or (inst.get("last_cal_result") or "").strip().upper() != "FAIL":
+                if not inst or (str(inst.get("last_cal_result") or "").strip().upper()) != "FAIL":
                     return False
 
         if self.recently_modified_days > 0:

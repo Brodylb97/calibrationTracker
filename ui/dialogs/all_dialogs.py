@@ -2,12 +2,15 @@
 # Some dialogs split into separate modules; re-exported here for backward compatibility.
 
 from datetime import datetime, date
+import logging
 import os
 import sqlite3
 import sys
 import tempfile
 import csv
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from PyQt5 import QtWidgets, QtCore, QtGui
 
@@ -1345,6 +1348,18 @@ class FieldEditDialog(QtWidgets.QDialog):
         self.setMinimumSize(460, 520)
         self.resize(540, 680)
 
+    def reject(self):
+        """Confirm before closing (Escape or Cancel) to avoid losing edits."""
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Discard changes?",
+            "Are you sure you want to close? Unsaved changes will be lost.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply == QtWidgets.QMessageBox.Yes:
+            super().reject()
+
     def _on_ok_clicked(self):
         """Validate via get_data(); only close dialog if validation passes."""
         if self.get_data() is not None:
@@ -1440,7 +1455,7 @@ class FieldEditDialog(QtWidgets.QDialog):
                 self.tol_equation_edit.setToolTip(
                     "PLOT([x1, x2, ...], [y1, y2, ...]). Each point is (x1,y1), (x2,y2), etc. "
                     "If X and Y are side by side (e.g. Certified Weight then Balance Response), set ref1=X1, ref2=Y1, ref3=X2, ref4=Y2, ... "
-                    "and use: PLOT([val1, val3, val5, ...], [val2, val4, val6, ...]). Chart appears in PDF export."
+                    "and use: PLOT([val1, val3, val5, ...], [val2, val4, val6, ...]). Charts appear in PDF export; ensure refs point to fields that have values for this record."
                 )
             if hasattr(self, "plot_group"):
                 self.plot_group.setVisible(True)
@@ -2738,7 +2753,9 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         layout.addWidget(self.table)
 
         # Details area: calculated values and bool pass/fail per point
-        layout.addWidget(QtWidgets.QLabel("Tolerance values (pass/fail):"))
+        self.details_label = QtWidgets.QLabel("Tolerance values (pass/fail):")
+        self.details_label.setToolTip("Pass/fail per tolerance point. Ref labels and values shown for each point.")
+        layout.addWidget(self.details_label)
         self.details = QtWidgets.QPlainTextEdit()
         self.details.setReadOnly(True)
         self.details.setMinimumHeight(170)
@@ -4190,6 +4207,21 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         dlg.open()
         dlg.raise_()
         dlg.activateWindow()
+
+    def reject(self):
+        """Confirm before closing (Escape or Cancel) when filling out a calibration."""
+        if self.read_only:
+            super().reject()
+            return
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Discard calibration?",
+            "Are you sure you want to close? Unsaved data will be lost.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply == QtWidgets.QMessageBox.Yes:
+            super().reject()
     
     def showEvent(self, event):
         """Override showEvent to ensure dialog is properly displayed."""
@@ -4987,6 +5019,7 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         except StaleDataError as e:
             if ok_btn:
                 ok_btn.setEnabled(True)
+            logger.warning("Calibration save failed (stale data): record_id=%s instrument_id=%s: %s", self.record_id, getattr(self, "instrument_id", None), e)
             QtWidgets.QMessageBox.warning(
                 self,
                 "Save failed",
@@ -4996,6 +5029,7 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         except Exception as e:
             if ok_btn:
                 ok_btn.setEnabled(True)
+            logger.warning("Calibration save failed: record_id=%s instrument_id=%s: %s", self.record_id, getattr(self, "instrument_id", None), e, exc_info=True)
             QtWidgets.QMessageBox.critical(self, "Error saving calibration", str(e))
             return
 
@@ -5096,6 +5130,7 @@ class CalibrationFormDialog(QtWidgets.QDialog):
 
             if is_required and not is_computed:
                 if val is None or val == "" or (val == "0" and dt != "bool"):
+                    logger.warning("Calibration validation failed: required field '%s' (label '%s') is empty", f.get("name"), f.get("label"))
                     QtWidgets.QMessageBox.warning(
                         self, "Validation", f"Field '{f['label']}' is required.",
                     )

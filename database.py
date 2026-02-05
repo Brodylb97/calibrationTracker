@@ -1,10 +1,13 @@
 # database.py
 
 import json
+import logging
 import os
 import sys
 import uuid
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from domain.models import Instrument
@@ -1823,18 +1826,24 @@ class CalibrationRepository:
             query += " WHERE (i.deleted_at IS NULL OR i.deleted_at = '')"
 
         # Overall result (Pass/Fail) of the single most recent calibration record per instrument only
-        cur.execute("PRAGMA table_info(calibration_records)")
-        rec_cols = [r[1] for r in cur.fetchall()]
-        cal_deleted_filter = " AND (r.deleted_at IS NULL OR r.deleted_at = '')" if "deleted_at" in rec_cols and not include_archived else ""
-        subq = (
-            "(SELECT r.result FROM calibration_records r "
-            "WHERE r.instrument_id = i.id" + cal_deleted_filter + " "
-            "ORDER BY r.cal_date DESC, r.id DESC LIMIT 1) AS last_cal_result"
-        )
-        query = query.replace(
-            " it.name AS instrument_type_name\n        FROM instruments i",
-            " it.name AS instrument_type_name,\n               " + subq + "\n        FROM instruments i",
-        )
+        # If subquery fails (e.g. calibration_records missing, schema change), run without last_cal_result so list still loads
+        try:
+            cur.execute("PRAGMA table_info(calibration_records)")
+            rec_cols = [r[1] for r in cur.fetchall()]
+            cal_deleted_filter = " AND (r.deleted_at IS NULL OR r.deleted_at = '')" if "deleted_at" in rec_cols and not include_archived else ""
+            subq = (
+                "(SELECT r.result FROM calibration_records r "
+                "WHERE r.instrument_id = i.id" + cal_deleted_filter + " "
+                "ORDER BY r.cal_date DESC, r.id DESC LIMIT 1) AS last_cal_result"
+            )
+            query = query.replace(
+                " it.name AS instrument_type_name\n        FROM instruments i",
+                " it.name AS instrument_type_name,\n               " + subq + "\n        FROM instruments i",
+            )
+        except Exception as e:
+            logger.warning(
+                "list_instruments: could not add last_cal_result subquery (%s); flag column will be blank", e
+            )
 
         query += " ORDER BY date(i.next_due_date) ASC, i.tag_number"
         cur = self.conn.execute(query)

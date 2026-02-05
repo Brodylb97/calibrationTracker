@@ -2,6 +2,8 @@
 
 *Quick reference. Full detail: `STABILITY_AND_UX_IMPROVEMENTS_PROPOSAL.md`.*
 
+**Status: Implemented**
+
 ---
 
 ## Stability (safe, incremental)
