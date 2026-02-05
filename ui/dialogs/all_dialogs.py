@@ -2719,7 +2719,15 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         inst = self.repo.get_instrument(instrument_id)
         tag = inst.get("tag_number", str(instrument_id)) if inst else str(instrument_id)
         self.setWindowTitle(f"Calibration History - {tag}")
-        self.resize(900, 600)
+        # Size to ~80% of available screen
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen:
+            geom = screen.availableGeometry()
+            w = int(geom.width() * 0.8)
+            h = int(geom.height() * 0.8)
+            self.resize(w, h)
+        else:
+            self.resize(900, 600)
 
         layout = QtWidgets.QVBoxLayout(self)
 
@@ -2752,18 +2760,22 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         layout.addWidget(self.table)
 
-        # Details area: calculated values and bool pass/fail per point
+        # Details area: tolerance values as table, pass/fail per point; groups highlighted green/red
         self.details_label = QtWidgets.QLabel("Tolerance values (pass/fail):")
         self.details_label.setToolTip("Pass/fail per tolerance point. Ref labels and values shown for each point.")
         layout.addWidget(self.details_label)
-        self.details = QtWidgets.QPlainTextEdit()
-        self.details.setReadOnly(True)
-        self.details.setMinimumHeight(170)
-        # Set word wrap to only break at word boundaries
-        option = QtGui.QTextOption()
-        option.setWrapMode(QtGui.QTextOption.WordWrap)
-        self.details.document().setDefaultTextOption(option)
-        layout.addWidget(self.details)
+        self.details_table = QtWidgets.QTableWidget()
+        self.details_table.setColumnCount(4)
+        self.details_table.setHorizontalHeaderLabels(["Point", "Value", "Tolerance", "Result"])
+        self.details_table.horizontalHeader().setStretchLastSection(True)
+        self.details_table.setAlternatingRowColors(False)  # we color by group
+        self.details_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.details_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        layout.addWidget(self.details_table, 1)  # stretch so table takes space
+        self.details_notes_label = QtWidgets.QLabel("")
+        self.details_notes_label.setWordWrap(True)
+        self.details_notes_label.setStyleSheet("color: gray; margin-top: 4px;")
+        layout.addWidget(self.details_notes_label)
 
         # Buttons with better organization and tooltips (grid allows wrapping)
         btn_layout = QtWidgets.QGridLayout()
@@ -2994,7 +3006,8 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         if recs:
             self.table.selectRow(0)
         else:
-            self.details.clear()
+            self.details_table.setRowCount(0)
+            self.details_notes_label.setText("")
         self._update_record_buttons()
 
     def _selected_record_id(self):
@@ -3027,7 +3040,8 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
     def _update_details(self):
         rec_id = self._selected_record_id()
         if not rec_id:
-            self.details.clear()
+            self.details_table.setRowCount(0)
+            self.details_notes_label.setText("")
             self._update_record_buttons()
             return
 
@@ -3061,8 +3075,18 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         except ImportError:
             evaluate_pass_fail = None
 
-        lines = []
+        table_rows = []
         last_group = None
+
+        def _add_row(grp, point, value, tolerance, result):
+            """Append a row for the tolerance table. result is PASS/FAIL/Pass/Fail or empty."""
+            table_rows.append({
+                "group": grp,
+                "point": str(point or ""),
+                "value": str(value or ""),
+                "tolerance": str(tolerance or ""),
+                "result": str(result or "").strip(),
+            })
 
         def _add_key(values_by_name, key, val_text):
             """Add a key and its lowercase variant so ref lookup is case-insensitive."""
@@ -3287,10 +3311,6 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                 data_type = v.get("data_type") or ""
                 tol_type = v.get("tolerance_type") or "fixed"
 
-                # Add blank line between groups
-                if last_group is not None and group_name != last_group:
-                    if lines and lines[-1] != "":
-                        lines.append("")
                 last_group = group_name
 
                 unit_str = f" {unit}" if unit else ""
@@ -3370,11 +3390,13 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                         status = "\u2713 PASS" if diff <= tol_fixed else "\u2717 FAIL"
 
                     pt = _point_prefix(ref1_name, ref2_name)
+                    point_str = f"{pt}{label}"
                     if display_parts is not None:
                         lhs, op_str, rhs, pass_ = display_parts
                         from tolerance_service import format_calculation_display
                         _dec = max(0, min(4, int(v.get("sig_figs") or f.get("sig_figs") or 3)))
-                        line = f"{pt}{label}: {format_calculation_display(lhs, decimal_places=_dec)} {op_str} {format_calculation_display(rhs, decimal_places=_dec)}, {'PASS' if pass_ else 'FAIL'}"
+                        val_str = f"{format_calculation_display(lhs, decimal_places=_dec)} {op_str} {format_calculation_display(rhs, decimal_places=_dec)}"
+                        _add_row(group_name, point_str, val_str, "", "PASS" if pass_ else "FAIL")
                     else:
                         try:
                             num_val = float(str(val_txt).strip())
@@ -3383,10 +3405,8 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                             val_display = format_calculation_display(num_val, decimal_places=_dec)
                         except (TypeError, ValueError):
                             val_display = val_txt
-                        line = f"{pt}{label}: {val_display}{unit_str}{tol_used}"
-                        if status:
-                            line += f"  {status}"
-                    lines.append(line)
+                        res = ("\u2713 PASS" if "PASS" in (status or "") else "\u2717 FAIL") if status else ""
+                        _add_row(group_name, point_str, f"{val_display}{unit_str}", tol_used, res)
                     continue
 
                 # 2) Convert-type fields: do not display in tolerance (pass/fail) section
@@ -3398,10 +3418,9 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                     pass_when = (v.get("tolerance_equation") or "true").strip().lower()
                     reading_bool = val_txt in ("1", "true", "yes", "on")
                     pt = _point_prefix(None, None)  # bool has no two refs
+                    point_str = f"{pt}{label}"
                     if pass_when not in ("true", "false"):
-                        # Still show value so cal history is never empty for this field
-                        line = f"{pt}{label}: {'Pass' if reading_bool else 'Fail'}"
-                        lines.append(line)
+                        _add_row(group_name, point_str, "Pass" if reading_bool else "Fail", "", "")
                         continue
                     reading_float = 1.0 if reading_bool else 0.0
                     result = "Fail"
@@ -3414,8 +3433,7 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                             result = "Pass" if pass_ else "Fail"
                         except Exception:
                             pass
-                    line = f"{pt}{label}: {result}"
-                    lines.append(line)
+                    _add_row(group_name, point_str, "", "", result)
                     continue
 
                 # 4) Tolerance-type (data_type "tolerance") fields: not stored; evaluate from this group's values (in sort order)
@@ -3467,15 +3485,14 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                             pt = _point_prefix(ref1, ref2)
                             if any(var not in vars_map for var in required):
                                 missing = [var for var in required if var not in vars_map]
-                                line = f"{pt}{label}: — (need: {', '.join(missing)})"
-                                lines.append(line)
+                                _add_row(group_name, f"{pt}{label}", f"— (need: {', '.join(missing)})", "", "")
                             else:
                                 parts = equation_tolerance_display(eq, vars_map)
                                 if parts is not None:
                                     lhs, op_str, rhs, pass_ = parts
                                     _dec = max(0, min(4, int(f.get("sig_figs") or 3)))
-                                    line = f"{pt}{label}: {format_calculation_display(lhs, decimal_places=_dec)} {op_str} {format_calculation_display(rhs, decimal_places=_dec)}, {'PASS' if pass_ else 'FAIL'}"
-                                    lines.append(line)
+                                    val_str = f"{format_calculation_display(lhs, decimal_places=_dec)} {op_str} {format_calculation_display(rhs, decimal_places=_dec)}"
+                                    _add_row(group_name, f"{pt}{label}", val_str, "", "PASS" if pass_ else "FAIL")
                                 elif evaluate_pass_fail:
                                     try:
                                         reading = vars_map.get("reading", 0.0)
@@ -3483,8 +3500,7 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                                             "equation", None, eq, nominal, reading,
                                             vars_map=vars_map, tolerance_lookup_json=None,
                                         )
-                                        line = f"{pt}{label}: {'PASS' if pass_ else 'FAIL'}"
-                                        lines.append(line)
+                                        _add_row(group_name, f"{pt}{label}", "", "", "PASS" if pass_ else "FAIL")
                                     except Exception:
                                         pass
                         except (ImportError, ValueError, TypeError):
@@ -3529,17 +3545,14 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                             pt = _point_prefix(ref1, ref2)
                             if any(var not in vars_map for var in required):
                                 missing = [var for var in required if var not in vars_map]
-                                line = f"{pt}{label}: — (need: {', '.join(missing)})"
-                                lines.append(line)
+                                _add_row(group_name, f"{pt}{label}", f"— (need: {', '.join(missing)})", "", "")
                             else:
                                 result = evaluate_tolerance_equation(eq, vars_map)
                                 _dec = max(0, min(4, int(f.get("sig_figs") or 3)))
-                                line = f"{pt}{label}: {format_calculation_display(result, decimal_places=_dec)}"
-                                lines.append(line)
+                                _add_row(group_name, f"{pt}{label}", format_calculation_display(result, decimal_places=_dec), "", "")
                         except (ImportError, ValueError, TypeError):
                             pt = _point_prefix(f.get("calc_ref1_name"), f.get("calc_ref2_name"))
-                            line = f"{pt}{label}: —"
-                            lines.append(line)
+                            _add_row(group_name, f"{pt}{label}", "—", "", "")
                     continue
 
                 # 5) Other fields with value and tolerance (number, reference, equation, percent, lookup)
@@ -3578,11 +3591,13 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                     ref1 = v.get("calc_ref1_name")
                     ref2 = v.get("calc_ref2_name")
                     pt = _point_prefix(ref1, ref2)
+                    point_str = f"{pt}{label}"
                     if display_parts is not None:
                         lhs, op_str, rhs, pass_ = display_parts
                         from tolerance_service import format_calculation_display
                         _dec = max(0, min(4, int(v.get("sig_figs") or f.get("sig_figs") or 3)))
-                        line = f"{pt}{label}: {format_calculation_display(lhs, decimal_places=_dec)} {op_str} {format_calculation_display(rhs, decimal_places=_dec)}, {'PASS' if pass_ else 'FAIL'}"
+                        val_str = f"{format_calculation_display(lhs, decimal_places=_dec)} {op_str} {format_calculation_display(rhs, decimal_places=_dec)}"
+                        _add_row(group_name, point_str, val_str, "", "PASS" if pass_ else "FAIL")
                     else:
                         try:
                             from tolerance_service import format_calculation_display
@@ -3590,7 +3605,7 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                             val_display = format_calculation_display(reading, decimal_places=_dec)
                         except (TypeError, ValueError):
                             val_display = val_txt
-                        line = f"{pt}{label}: {val_display}{unit_str}"
+                        res = ""
                         if evaluate_pass_fail and (v.get("tolerance_equation") or v.get("tolerance") is not None or v.get("tolerance_lookup_json")):
                             try:
                                 tol_fixed = None
@@ -3609,35 +3624,45 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                                     vars_map=vars_map,
                                     tolerance_lookup_json=v.get("tolerance_lookup_json"),
                                 )
-                                line += f"  \u2713 PASS" if pass_ else f"  \u2717 FAIL"
+                                res = "\u2713 PASS" if pass_ else "\u2717 FAIL"
                             except Exception:
                                 pass
-                    lines.append(line)
+                        _add_row(group_name, point_str, f"{val_display}{unit_str}", "", res)
                     continue
 
-        if not lines:
+        # Which groups have any FAIL (for row highlighting)
+        group_failed = {}
+        for row in table_rows:
+            r = (row.get("result") or "").upper()
+            if "FAIL" in r or row.get("result") == "Fail":
+                group_failed[row["group"]] = True
+            elif row["group"] not in group_failed:
+                group_failed[row["group"]] = False
+
+        if not table_rows:
+            self.details_table.setRowCount(1)
+            self.details_table.setRowHeight(0, 60)
             if rec and not vals:
-                self.details.setPlainText(
-                    "No data recorded for this calibration.\n\n"
-                    "Open View/Edit, enter values, and save to see tolerance (equation/boolean) pass/fail results here."
-                )
+                msg = "No data recorded for this calibration.\n\nOpen View/Edit, enter values, and save to see tolerance (equation/boolean) pass/fail results here."
             else:
-                self.details.setPlainText(
-                    "No tolerance (pass/fail) values recorded for this calibration.\n\n"
-                    "Templates must have equation or boolean tolerance fields (or tolerance on number/computed fields) to show results here."
-                )
+                msg = "No tolerance (pass/fail) values recorded for this calibration.\n\nTemplates must have equation or boolean tolerance fields (or tolerance on number/computed fields) to show results here."
+            self.details_table.setItem(0, 0, QtWidgets.QTableWidgetItem(msg))
+            self.details_table.setSpan(0, 0, 1, 4)
+            self.details_notes_label.setText("")
         else:
-            # Add two new lines after the last point difference
-            lines.append("")
-            lines.append("")
-            
-            # Append template notes if they exist
-            if rec and rec.get("template_notes"):
-                template_notes = rec.get("template_notes", "").strip()
-                if template_notes:
-                    lines.append(template_notes)
-            
-            self.details.setPlainText("\n".join(lines))
+            self.details_table.setRowCount(len(table_rows))
+            pass_brush = QtGui.QBrush(QtGui.QColor(220, 255, 220))   # light green
+            fail_brush = QtGui.QBrush(QtGui.QColor(255, 220, 220))   # light red
+            for r, row in enumerate(table_rows):
+                failed = group_failed.get(row["group"], False) if row["group"] else None
+                for c, key in enumerate(["point", "value", "tolerance", "result"]):
+                    item = QtWidgets.QTableWidgetItem(row.get(key, ""))
+                    if failed is not None:
+                        item.setBackground(fail_brush if failed else pass_brush)
+                    self.details_table.setItem(r, c, item)
+            self.details_table.resizeRowsToContents()
+            template_notes = (rec or {}).get("template_notes", "").strip()
+            self.details_notes_label.setText(template_notes if template_notes else "")
 
     def on_new_cal(self):
         inst = self.repo.get_instrument(self.instrument_id)
