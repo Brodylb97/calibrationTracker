@@ -178,6 +178,7 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
             <h4>Field Configuration:</h4>
             <ul>
                 <li><b>Type</b>: Data type — text, number, bool, date, signature, reference, tolerance, convert, stat, plot, field header</li>
+                <li><b>Appear in calibrations table?</b>: For number fields only. When checked, this field's value is shown in the Variables column alongside reference values for each calibration point in the calibration history.</li>
                 <li><b>Unit</b>: Unit of measurement (number, convert, tolerance, reference, stat)</li>
                 <li><b>Reference value</b>: Shown when Type is reference; the reference/nominal value for this point</li>
                 <li><b>Required</b>: Check if field must be filled (not used for tolerance, convert, or stat)</li>
@@ -240,7 +241,7 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
             
             <h4>Table Columns (click headers to sort):</h4>
             <ul>
-                <li><b>Name</b>, <b>Label</b>, <b>Type</b>, <b>Unit</b>, <b>Required</b>, <b>Sort</b>, <b>Group</b>, <b>Calc</b>, <b>Tolerance</b></li>
+                <li><b>Name</b>, <b>Label</b>, <b>Type</b>, <b>Unit</b>, <b>Required</b>, <b>Sort</b>, <b>Group</b>, <b>Tolerance</b></li>
             </ul>
             
             <h4>Field types and equations:</h4>
@@ -270,8 +271,8 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
             <h4>Tolerance Values Table:</h4>
             <p>When a record is selected, the details area shows a table of tolerance (pass/fail) results:</p>
             <ul>
-                <li><b>Point</b>: Calibration point (ref labels and values)</li>
-                <li><b>Tolerance</b>: Measured or computed value for that point</li>
+                <li><b>Variables</b>: Reference values (ref_label: value) and number fields with "Appear in calibrations table" checked</li>
+                <li><b>Tolerance</b>: Field label and measured/computed value (label: value)</li>
                 <li><b>Result</b>: PASS or FAIL for that point</li>
                 <li><b>Group highlighting</b>: Rows are colored by group — green if all points in the group pass, red if any point fails</li>
                 <li>Template notes appear below the table when present</li>

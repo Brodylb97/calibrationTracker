@@ -82,16 +82,73 @@ _VERSION_FETCH_HEADERS = {
 }
 
 
+def _parse_github_latest_download_url(url):
+    """If url is github.com/OWNER/REPO/releases/latest/download/ASSET return (owner, repo, asset_name); else None."""
+    if not url or "github.com" not in url or "/releases/latest/download/" not in url:
+        return None
+    try:
+        after = url.split("github.com/", 1)[-1]
+        parts = after.split("/releases/latest/download/", 1)
+        if len(parts) != 2:
+            return None
+        owner_repo = parts[0].strip("/").split("/")
+        if len(owner_repo) < 2:
+            return None
+        owner, repo = owner_repo[0], owner_repo[1]
+        asset_name = (parts[1].split("?")[0] or "").strip("/") or None
+        if not asset_name:
+            return None
+        return (owner, repo, asset_name)
+    except Exception:
+        return None
+
+
+def _get_latest_release_version_github(owner, repo, timeout_seconds=15):
+    """Get latest release version (tag_name, 'v' stripped) from GitHub API. Returns version string or None."""
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+    headers = {"User-Agent": "CalibrationTracker-Updater/1.0", "Accept": "application/vnd.github.v3+json"}
+    try:
+        import requests
+        r = requests.get(api_url, headers=headers, timeout=timeout_seconds)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+    except ImportError:
+        try:
+            from urllib.request import Request, urlopen
+            import json as _json
+            req = Request(api_url, headers=headers)
+            with urlopen(req, timeout=timeout_seconds) as resp:
+                data = _json.loads(resp.read().decode("utf-8", errors="replace"))
+        except Exception:
+            return None
+    except Exception:
+        return None
+    tag = (data.get("tag_name") or "").strip()
+    if tag.startswith("v"):
+        tag = tag[1:]
+    return tag if tag else None
+
+
 def get_latest_version_from_remote(config=None, timeout_seconds=15):
     """
-    Fetch the latest version string from the remote source (version URL in config).
-    Tries the configured URL first, then GitHub API as fallback if the URL looks like raw.githubusercontent.
+    Fetch the latest version string from the remote source.
+    When remote_package_url is GitHub releases/latest, uses the Releases API so
+    the reported "latest" matches what the updater will install (single step to newest).
+    Otherwise uses remote_version_url (e.g. raw VERSION on a branch).
     Returns (version_string or None, error_message or None).
     """
     if config is None:
         config = _load_config()
     if config is None:
         return None, "Update config not found"
+    package_url = config.get("remote_package_url")
+    gh = _parse_github_latest_download_url(package_url)
+    if gh:
+        owner, repo, _ = gh
+        version = _get_latest_release_version_github(owner, repo, timeout_seconds)
+        if version is not None:
+            return version, None
     url = config.get("remote_version_url")
     if not url:
         return None, "remote_version_url not set"

@@ -1105,10 +1105,11 @@ class FieldEditDialog(QtWidgets.QDialog):
         self.type_combo = QtWidgets.QComboBox()
         self.type_combo.setMinimumWidth(_min_field_w)
         self.type_combo.addItems(["text", "number", "bool", "date", "signature", "reference", "tolerance", "convert", "stat", "plot"])
+        self.type_combo.addItem("Reference cal date", "reference_cal_date")
         self.type_combo.addItem("Non-affected Date", "non_affected_date")
         self.type_combo.addItem("Field Header", "field_header")
         dt = self.field.get("data_type") or "text"
-        idx = self.type_combo.findData(dt) if dt in ("non_affected_date", "field_header") else self.type_combo.findText(dt)
+        idx = self.type_combo.findData(dt) if dt in ("non_affected_date", "field_header", "reference_cal_date") else self.type_combo.findText(dt)
         if idx >= 0:
             self.type_combo.setCurrentIndex(idx)
         
@@ -1202,6 +1203,10 @@ class FieldEditDialog(QtWidgets.QDialog):
         form.addRow(self.reference_value_label, self.reference_value_edit)
         form.addRow(self.unit_label, self.unit_edit)
         form.addRow("", self.required_check)
+        self.appear_in_cal_check = QtWidgets.QCheckBox("Appear in calibrations table?")
+        self.appear_in_cal_check.setToolTip("When checked, this field's value is shown in the Variables column alongside reference values for each calibration point. Applies to number and convert fields.")
+        self.appear_in_cal_check.setChecked(bool(self.field.get("appear_in_calibrations_table", 0)))
+        form.addRow("", self.appear_in_cal_check)
         form.addRow("Sort order", self.sort_spin)
         form.addRow("Group", self.group_edit)
         self.sig_figs_spin = QtWidgets.QSpinBox()
@@ -1213,6 +1218,8 @@ class FieldEditDialog(QtWidgets.QDialog):
         show_decimals = (dt or "").strip().lower() in ("number", "convert", "tolerance", "reference", "stat")
         self.sig_figs_spin.setVisible(show_decimals)
         self.sig_figs_label.setVisible(show_decimals)
+        if hasattr(self, "appear_in_cal_check"):
+            self.appear_in_cal_check.setVisible((dt or "").strip().lower() in ("number", "convert"))
         form.addRow("Tolerance type", self.tol_type_combo)
         form.addRow(self.tol_equation_label, self.tol_equation_edit)
         form.addRow(self.tol_bool_pass_label, self.tol_bool_pass_combo)
@@ -1367,7 +1374,7 @@ class FieldEditDialog(QtWidgets.QDialog):
 
     def _get_value_combo_group(self):
         """Group to filter value (ref) combos by. Stat and plot types have access to all variables (no filter)."""
-        data_type = self.type_combo.currentText() if hasattr(self, "type_combo") else ""
+        data_type = (self.type_combo.currentData() or self.type_combo.currentText() or "").strip().lower().replace(" ", "_")
         if data_type in ("stat", "plot"):
             return ""  # Stat/plot: show all template fields in val1..val12 dropdowns
         return (self.group_edit.text() or "").strip() if hasattr(self, "group_edit") else ""
@@ -1406,18 +1413,22 @@ class FieldEditDialog(QtWidgets.QDialog):
 
     def _on_type_changed(self, data_type: str):
         """Show/hide Unit (when number), Reference value (when reference). Show tolerance/convert/stat/plot section for bool, tolerance, convert, stat, plot."""
-        is_number = (data_type == "number")
-        is_reference = (data_type == "reference")
-        is_tolerance = (data_type == "tolerance")
-        is_convert = (data_type == "convert")
-        is_stat = (data_type == "stat")
-        is_plot = (data_type == "plot")
-        is_field_header = (data_type in ("Field Header", "field_header"))
-        is_bool = (data_type == "bool")
+        dt = (data_type or "").strip().lower().replace(" ", "_")
+        is_number = (dt == "number")
+        is_reference = (dt == "reference")
+        is_reference_cal_date = (dt == "reference_cal_date")
+        is_tolerance = (dt == "tolerance")
+        is_convert = (dt == "convert")
+        is_stat = (dt == "stat")
+        is_plot = (dt == "plot")
+        is_field_header = (dt in ("field_header",))
+        is_bool = (dt == "bool")
         show_unit = is_number or is_convert or is_tolerance or is_reference or is_stat
         if hasattr(self, "unit_edit") and hasattr(self, "unit_label"):
             self.unit_edit.setVisible(show_unit)
             self.unit_label.setVisible(show_unit)
+        if hasattr(self, "appear_in_cal_check"):
+            self.appear_in_cal_check.setVisible(is_number or is_convert)
         if hasattr(self, "sig_figs_spin") and hasattr(self, "sig_figs_label"):
             show_decimals = is_number or is_convert or is_tolerance or is_reference or is_stat
             self.sig_figs_spin.setVisible(show_decimals)
@@ -1482,7 +1493,7 @@ class FieldEditDialog(QtWidgets.QDialog):
         if hasattr(self, "tol_type_combo"):
             self._on_tolerance_type_changed(self.tol_type_combo.currentIndex())
         if hasattr(self, "tol_type_combo"):
-            self.tol_type_combo.setVisible(not is_convert and not is_stat and not is_plot and not is_field_header)
+            self.tol_type_combo.setVisible(not is_convert and not is_stat and not is_plot and not is_field_header and not is_reference_cal_date)
         if is_tolerance and hasattr(self, "test_group"):
             self.test_group.setVisible(False)
         if is_convert and hasattr(self, "test_group"):
@@ -1491,8 +1502,42 @@ class FieldEditDialog(QtWidgets.QDialog):
             self.test_group.setVisible(False)
         if is_plot and hasattr(self, "test_group"):
             self.test_group.setVisible(False)
+        if is_reference_cal_date and hasattr(self, "test_group"):
+            self.test_group.setVisible(False)
+        # Reference cal date: label is displayed; Instrument reference points to field containing instrument ID
+        if is_reference_cal_date:
+            self._refresh_value_combos()
+            if hasattr(self, "val1_label"):
+                self.val1_label.setText("Instrument reference")
+                self.val1_label.setToolTip("Field that contains the instrument ID or tag number. Use when the label does not contain the ID.")
+                self.val1_label.setVisible(True)
+            if hasattr(self, "ref1_combo"):
+                self.ref1_combo.setVisible(True)
+                self.ref1_combo.setToolTip("Select the field that holds the reference instrument's ID or tag number.")
+            for i in range(2, 13):
+                lbl = getattr(self, f"val{i}_label", None)
+                cb = getattr(self, f"ref{i}_combo", None)
+                if lbl:
+                    lbl.setVisible(False)
+                if cb:
+                    cb.setVisible(False)
+            if hasattr(self, "tol_equation_edit"):
+                self.tol_equation_edit.setVisible(False)
+            if hasattr(self, "tol_equation_label"):
+                self.tol_equation_label.setVisible(False)
+            if hasattr(self, "tol_validation_label"):
+                self.tol_validation_label.setVisible(False)
+            if hasattr(self, "var_btn_widget"):
+                self.var_btn_widget.setVisible(False)
+            if hasattr(self, "tol_bool_pass_combo"):
+                self.tol_bool_pass_combo.setVisible(False)
+            if hasattr(self, "tol_bool_pass_label"):
+                self.tol_bool_pass_label.setVisible(False)
         # Tolerance-type, convert, stat, and plot fields: show equation + refs (val1-val5 always; val6-val12 only when used)
-        if is_convert or is_stat or is_plot:
+        elif is_convert or is_stat or is_plot:
+            if hasattr(self, "val1_label"):
+                self.val1_label.setText("val1 field")
+                self.val1_label.setToolTip("")
             if hasattr(self, "tol_equation_edit"):
                 self.tol_equation_edit.setVisible(True)
             if hasattr(self, "tol_equation_label"):
@@ -1540,16 +1585,17 @@ class FieldEditDialog(QtWidgets.QDialog):
                 self.required_check.setChecked(False)
         # Tolerance-type, convert, stat, and plot fields are display-only; hide Required.
         if hasattr(self, "required_check") and not is_field_header:
-            self.required_check.setVisible(not is_tolerance and not is_convert and not is_stat and not is_plot)
-            if is_tolerance or is_convert or is_stat or is_plot:
+            self.required_check.setVisible(not is_tolerance and not is_convert and not is_stat and not is_plot and not is_reference_cal_date)
+            if is_tolerance or is_convert or is_stat or is_plot or is_reference_cal_date:
                 self.required_check.setChecked(False)
 
     def _on_tolerance_type_changed(self, index: int):
         """Show equation edit and val1-val5 when Equation; val6-val12 only when used in equation or ref set. Bool pass combo for Boolean."""
-        data_type = self.type_combo.currentText() if hasattr(self, "type_combo") else ""
+        data_type = (self.type_combo.currentData() or self.type_combo.currentText() or "").strip().lower().replace(" ", "_")
         is_convert = (data_type == "convert")
         is_stat = (data_type == "stat")
         is_plot = (data_type == "plot")
+        is_reference_cal_date = (data_type == "reference_cal_date")
         tol_type = self.tol_type_combo.currentData() if hasattr(self, "tol_type_combo") else None
         is_equation = (tol_type == "equation") or is_convert or is_stat or is_plot
         is_bool = (tol_type == "bool") and not is_convert
@@ -1559,13 +1605,27 @@ class FieldEditDialog(QtWidgets.QDialog):
         if hasattr(self, "tol_bool_pass_combo"):
             self.tol_bool_pass_combo.setVisible(is_bool)
             self.tol_bool_pass_label.setVisible(is_bool)
-        for i in range(1, 6):
-            lbl = getattr(self, f"val{i}_label", None)
-            cb = getattr(self, f"ref{i}_combo", None)
-            if lbl:
-                lbl.setVisible(is_equation)
-            if cb:
-                cb.setVisible(is_equation)
+        # reference_cal_date: show only val1/ref1 (Instrument reference)
+        if is_reference_cal_date:
+            if hasattr(self, "val1_label"):
+                self.val1_label.setVisible(True)
+            if hasattr(self, "ref1_combo"):
+                self.ref1_combo.setVisible(True)
+            for i in range(2, 13):
+                lbl = getattr(self, f"val{i}_label", None)
+                cb = getattr(self, f"ref{i}_combo", None)
+                if lbl:
+                    lbl.setVisible(False)
+                if cb:
+                    cb.setVisible(False)
+        else:
+            for i in range(1, 6):
+                lbl = getattr(self, f"val{i}_label", None)
+                cb = getattr(self, f"ref{i}_combo", None)
+                if lbl:
+                    lbl.setVisible(is_equation)
+                if cb:
+                    cb.setVisible(is_equation)
         if is_equation:
             self._update_val_ref_visibility()
         else:
@@ -1803,6 +1863,15 @@ class FieldEditDialog(QtWidgets.QDialog):
             ref10_name = self.ref10_combo.currentData()
             ref11_name = self.ref11_combo.currentData()
             ref12_name = self.ref12_combo.currentData()
+        # Reference cal date: ref1 = field containing instrument ID (tag or numeric)
+        elif data_type == "reference_cal_date":
+            ref1_name = self.ref1_combo.currentData()
+            if not ref1_name:
+                QtWidgets.QMessageBox.warning(
+                    self, "Validation",
+                    "Instrument reference is required. Select the field that contains the reference instrument's ID or tag number.",
+                )
+                return None
         # Convert type: equation + refs, numeric expression only (no pass/fail required)
         elif data_type == "convert":
             tolerance_equation = self.tol_equation_edit.text().strip() or None
@@ -1924,6 +1993,7 @@ class FieldEditDialog(QtWidgets.QDialog):
             "plot_y_min": _parse_float_optional(self.plot_y_min_edit.text()) if data_type == "plot" else None,
             "plot_y_max": _parse_float_optional(self.plot_y_max_edit.text()) if data_type == "plot" else None,
             "plot_best_fit": self.plot_best_fit_check.isChecked() if data_type == "plot" else False,
+            "appear_in_calibrations_table": self.appear_in_cal_check.isChecked() if data_type in ("number", "convert") else False,
         }
 
 
@@ -2041,9 +2111,9 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
         layout = QtWidgets.QVBoxLayout(self)
 
         self.table = QtWidgets.QTableWidget()
-        self.table.setColumnCount(9)
+        self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels(
-            ["Name", "Label", "Type", "Unit", "Required", "Sort", "Group", "Calc", "Tolerance"]
+            ["Name", "Label", "Type", "Unit", "Required", "Sort", "Group", "Tolerance"]
         )
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
@@ -2061,18 +2131,32 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
         self.btn_delete = QtWidgets.QPushButton("Delete")
         self.btn_dup_group = QtWidgets.QPushButton("Duplicate group")
         self.btn_explain = QtWidgets.QPushButton("Explain tolerance")
-        self.btn_batch_eq = QtWidgets.QPushButton("Batch change equation")
-        self.btn_batch_unit = QtWidgets.QPushButton("Batch apply unit")
-        self.btn_batch_decimal = QtWidgets.QPushButton("Batch set decimal")
         self.btn_explain.setToolTip("Show how tolerance is calculated (plain language + technical)")
-        self.btn_batch_eq.setToolTip("Set tolerance equation for selected fields (equation type)")
-        self.btn_batch_unit.setToolTip("Set unit for selected fields (e.g. °F, °C)")
-        self.btn_batch_decimal.setToolTip("Set numbers after decimal (0-4) for selected number, convert, reference, tolerance, and stat fields")
-        self.btn_batch_group = QtWidgets.QPushButton("Batch set group")
-        self.btn_batch_group.setToolTip("Set group name for selected fields")
+        self.btn_batch = QtWidgets.QPushButton("Batch")
+        self.btn_batch.setToolTip("Apply batch operations to selected fields")
+        batch_menu = QtWidgets.QMenu(self)
+        act_eq = batch_menu.addAction("Change tolerance equation")
+        act_eq.setToolTip("Set tolerance equation for selected fields (equation type)")
+        act_unit = batch_menu.addAction("Apply unit")
+        act_unit.setToolTip("Set unit for selected fields (e.g. °F, °C)")
+        act_decimal = batch_menu.addAction("Set decimal places")
+        act_decimal.setToolTip("Set numbers after decimal (0-4) for selected fields")
+        act_group = batch_menu.addAction("Set group")
+        act_group.setToolTip("Set group name for selected fields")
+        act_type = batch_menu.addAction("Set type")
+        act_type.setToolTip("Set field type for selected fields")
+        batch_menu.addSeparator()
+        act_appear = batch_menu.addAction("Check 'Appear in calibrations table'")
+        act_appear.setToolTip("Enable 'Appear in calibrations table' for selected number and convert fields (shows value in tolerance table)")
+        self.btn_batch.setMenu(batch_menu)
+        act_eq.triggered.connect(self.on_batch_change_equation)
+        act_unit.triggered.connect(self.on_batch_apply_unit)
+        act_decimal.triggered.connect(self.on_batch_set_decimal)
+        act_group.triggered.connect(self.on_batch_set_group)
+        act_type.triggered.connect(self.on_batch_set_type)
+        act_appear.triggered.connect(self.on_batch_appear_in_calibrations_table)
         for i, btn in enumerate([self.btn_add, self.btn_edit, self.btn_delete, self.btn_dup_group,
-                                 self.btn_explain, self.btn_batch_eq, self.btn_batch_unit,
-                                 self.btn_batch_decimal, self.btn_batch_group]):
+                                 self.btn_explain, self.btn_batch]):
             btn.setMinimumWidth(100)
             btn_layout.addWidget(btn, i // 4, i % 4)
         layout.addLayout(btn_layout)
@@ -2083,10 +2167,6 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
         self.btn_delete.clicked.connect(self.on_delete)
         self.btn_dup_group.clicked.connect(self.on_dup_group)
         self.btn_explain.clicked.connect(self.on_explain_tolerance)
-        self.btn_batch_eq.clicked.connect(self.on_batch_change_equation)
-        self.btn_batch_unit.clicked.connect(self.on_batch_apply_unit)
-        self.btn_batch_decimal.clicked.connect(self.on_batch_set_decimal)
-        self.btn_batch_group.clicked.connect(self.on_batch_set_group)
 
         btn_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Help | QtWidgets.QDialogButtonBox.Close)
         btn_box.helpRequested.connect(lambda: self._show_help())
@@ -2143,32 +2223,6 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                 it_name = mk(f.get("name", ""))
                 it_name.setData(QtCore.Qt.UserRole, f["id"])
 
-                calc_desc = ""
-                if f.get("calc_type") == "ABS_DIFF":
-                    r1 = f.get("calc_ref1_name") or "?"
-                    r2 = f.get("calc_ref2_name") or "?"
-                    calc_desc = f"|{r1} - {r2}|"
-                elif f.get("calc_type") == "PCT_ERROR":
-                    r1 = f.get("calc_ref1_name") or "?"
-                    r2 = f.get("calc_ref2_name") or "?"
-                    calc_desc = f"|{r1} - {r2}| / |{r2}| * 100"
-                elif f.get("calc_type") == "PCT_DIFF":
-                    r1 = f.get("calc_ref1_name") or "?"
-                    r2 = f.get("calc_ref2_name") or "?"
-                    calc_desc = f"|{r1} - {r2}| / avg * 100"
-                elif f.get("calc_type") == "MIN_OF":
-                    refs = [f.get(f"calc_ref{i}_name") for i in range(1, 13) if f.get(f"calc_ref{i}_name")]
-                    calc_desc = "min(" + ", ".join(refs or ["?"]) + ")"
-                elif f.get("calc_type") == "MAX_OF":
-                    refs = [f.get(f"calc_ref{i}_name") for i in range(1, 13) if f.get(f"calc_ref{i}_name")]
-                    calc_desc = "max(" + ", ".join(refs or ["?"]) + ")"
-                elif f.get("calc_type") == "RANGE_OF":
-                    refs = [f.get(f"calc_ref{i}_name") for i in range(1, 13) if f.get(f"calc_ref{i}_name")]
-                    calc_desc = "max-min(" + ", ".join(refs or ["?"]) + ")"
-                elif f.get("calc_type") == "CUSTOM_EQUATION":
-                    eq = (f.get("tolerance_equation") or "").strip()
-                    calc_desc = "equation: " + (eq[:30] + "..." if len(eq) > 30 else eq) if eq else "equation (pass/fail)"
-
                 tol = f.get("tolerance")
                 tol_type = f.get("tolerance_type") or "fixed"
                 if tol_type == "equation":
@@ -2193,8 +2247,7 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                 sort_item.setData(QtCore.Qt.DisplayRole, sort_val)
                 self.table.setItem(row, 5, sort_item)
                 self.table.setItem(row, 6, mk(f.get("group_name") or ""))
-                self.table.setItem(row, 7, mk(calc_desc))
-                self.table.setItem(row, 8, mk(tol_txt))
+                self.table.setItem(row, 7, mk(tol_txt))
             # M5: Summary row
             tolerances = []
             for f in fields:
@@ -2309,6 +2362,7 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                 data.get("plot_y_min"),
                 data.get("plot_y_max"),
                 data.get("plot_best_fit", False),
+                data.get("appear_in_calibrations_table", False),
             )
         except sqlite3.OperationalError as e:
             self._db_error(e)
@@ -2378,6 +2432,15 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
         dlg = ExplainToleranceDialog(field, parent=self)
         dlg.exec_()
 
+    def _field_data_for_update(self, f: dict) -> dict:
+        """Build a complete data dict for update_template_field from a field row (current schema)."""
+        data = dict(f)
+        # Ensure boolean-like fields are explicit for update (handles 0/1 from DB)
+        for key in ("required", "autofill_from_first_group", "appear_in_calibrations_table", "plot_best_fit"):
+            if key in data and data[key] is not None:
+                data[key] = bool(data[key])
+        return data
+
     def on_batch_change_equation(self):
         """Batch set tolerance equation for selected fields (sets type to equation)."""
         ids = self._selected_field_ids()
@@ -2389,9 +2452,9 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
         tol_eq, ok = QtWidgets.QInputDialog.getText(
             self,
             "Batch change tolerance equation",
-            "Equation (Excel-like, e.g. 0.02 * ABS(nominal)). Applied to selected fields with equation-compatible calc type:",
+            "Equation (Excel-like, e.g. reading <= 0.02 * nominal or LINEST([val1,val2],[ref1,ref2])). Applied to selected fields that support equations (number, reference, tolerance, stat, or computed diff):",
             QtWidgets.QLineEdit.Normal,
-            "0.02 * ABS(nominal)",
+            "reading <= 0.02 * nominal",
         )
         if not ok or not tol_eq.strip():
             return
@@ -2404,9 +2467,16 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                 f = field_by_id.get(fid)
                 if not f:
                     continue
-                if f.get("calc_type") not in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF", "MIN_OF", "MAX_OF", "RANGE_OF"):
+                dt = (f.get("data_type") or "").strip().lower()
+                calc_type = f.get("calc_type")
+                # Apply to: computed diff fields, number/reference with equation tolerance, tolerance (data_type), or stat
+                is_computed = calc_type in ("ABS_DIFF", "PCT_ERROR", "PCT_DIFF", "MIN_OF", "MAX_OF", "RANGE_OF")
+                is_number_or_ref = dt in ("number", "reference")
+                is_tolerance_type = dt == "tolerance"
+                is_stat = dt == "stat"
+                if not (is_computed or is_number_or_ref or is_tolerance_type or is_stat):
                     continue
-                data = dict(f)
+                data = self._field_data_for_update(f)
                 data["tolerance_type"] = "equation"
                 data["tolerance_equation"] = tol_eq
                 self.repo.update_template_field(fid, data)
@@ -2445,7 +2515,7 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                 f = field_by_id.get(fid)
                 if not f:
                     continue
-                data = dict(f)
+                data = self._field_data_for_update(f)
                 data["unit"] = unit
                 self.repo.update_template_field(fid, data)
                 applied += 1
@@ -2486,7 +2556,7 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                     continue
                 if (f.get("data_type") or "").strip().lower() not in supported:
                     continue
-                data = dict(f)
+                data = self._field_data_for_update(f)
                 data["sig_figs"] = decimals
                 self.repo.update_template_field(fid, data)
                 applied += 1
@@ -2524,7 +2594,7 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                 f = field_by_id.get(fid)
                 if not f:
                     continue
-                data = dict(f)
+                data = self._field_data_for_update(f)
                 data["group_name"] = group_name
                 self.repo.update_template_field(fid, data)
                 applied += 1
@@ -2534,6 +2604,91 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
         self._load_fields()
         QtWidgets.QMessageBox.information(
             self, "Done", f"Applied group to {applied} field(s)."
+        )
+
+    def on_batch_set_type(self):
+        """Set field type for selected fields."""
+        ids = self._selected_field_ids()
+        if not ids:
+            QtWidgets.QMessageBox.information(
+                self,
+                "No selection",
+                "Select one or more field rows to set the type for.",
+            )
+            return
+        type_options = [
+            "text", "number", "bool", "date", "signature", "reference",
+            "reference_cal_date", "tolerance", "convert", "stat", "plot",
+            "non_affected_date", "field_header",
+        ]
+        display_names = [
+            "text", "number", "bool", "date", "signature", "reference",
+            "Reference cal date", "tolerance", "convert", "stat", "plot",
+            "Non-affected Date", "Field Header",
+        ]
+        chosen, ok = QtWidgets.QInputDialog.getItem(
+            self,
+            "Batch set type",
+            "Field type to apply to selected fields:",
+            display_names,
+            0,
+            False,
+        )
+        if not ok or not chosen:
+            return
+        idx = display_names.index(chosen)
+        new_type = type_options[idx]
+        try:
+            fields = self.repo.list_template_fields(self.template_id)
+            field_by_id = {f["id"]: f for f in fields}
+            applied = 0
+            for fid in ids:
+                f = field_by_id.get(fid)
+                if not f:
+                    continue
+                data = self._field_data_for_update(f)
+                data["data_type"] = new_type
+                self.repo.update_template_field(fid, data)
+                applied += 1
+        except sqlite3.OperationalError as e:
+            self._db_error(e)
+            return
+        self._load_fields()
+        QtWidgets.QMessageBox.information(
+            self, "Done", f"Applied type '{chosen}' to {applied} field(s)."
+        )
+
+    def on_batch_appear_in_calibrations_table(self):
+        """Check 'Appear in calibrations table' for selected number and convert fields."""
+        ids = self._selected_field_ids()
+        if not ids:
+            QtWidgets.QMessageBox.information(
+                self,
+                "No selection",
+                "Select one or more number or convert field rows to enable 'Appear in calibrations table'.",
+            )
+            return
+        try:
+            fields = self.repo.list_template_fields(self.template_id)
+            field_by_id = {f["id"]: f for f in fields}
+            applied = 0
+            for fid in ids:
+                f = field_by_id.get(fid)
+                if not f:
+                    continue
+                if (f.get("data_type") or "").strip().lower() not in ("number", "convert"):
+                    continue
+                data = self._field_data_for_update(f)
+                data["appear_in_calibrations_table"] = True
+                self.repo.update_template_field(fid, data)
+                applied += 1
+        except sqlite3.OperationalError as e:
+            self._db_error(e)
+            return
+        self._load_fields()
+        QtWidgets.QMessageBox.information(
+            self, "Done",
+            f"Enabled 'Appear in calibrations table' for {applied} field(s)."
         )
 
     def on_dup_group(self):
@@ -2702,6 +2857,7 @@ class TemplateFieldsDialog(QtWidgets.QDialog):
                     f.get("plot_y_min"),
                     f.get("plot_y_max"),
                     bool(f.get("plot_best_fit", 0)),
+                    bool(f.get("appear_in_calibrations_table", 0)),
                 )
         except sqlite3.OperationalError as e:
             self._db_error(e)
@@ -2762,13 +2918,13 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
 
         # Details area: tolerance values as table, pass/fail per point; groups highlighted green/red
         self.details_label = QtWidgets.QLabel("Tolerance values (pass/fail):")
-        self.details_label.setToolTip("Pass/fail per tolerance point. Point, Tolerance, and Result columns. Groups highlighted green (pass) or red (fail).")
+        self.details_label.setToolTip("Pass/fail per tolerance point. Variables (refs + checked number fields), Tolerance (field label + value), Result. Groups highlighted green (pass) or red (fail).")
         layout.addWidget(self.details_label)
         self.details_table = QtWidgets.QTableWidget()
         self.details_table.setColumnCount(3)
-        self.details_table.setHorizontalHeaderLabels(["Point", "Tolerance", "Result"])
+        self.details_table.setHorizontalHeaderLabels(["Variables", "Tolerance", "Result"])
         header = self.details_table.horizontalHeader()
-        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)   # Point
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)   # Variables
         header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)            # Tolerance - fills remaining space
         header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)   # Result
         self.details_table.setAlternatingRowColors(False)  # we color by group
@@ -3171,6 +3327,29 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                         _add_key(values_by_name, tlabel, formatted)
                 except (ValueError, TypeError):
                     pass
+            # Reference cal date: lookup instrument by ref1 value, add last_cal_date to values_by_name
+            for tf in template_fields_by_id.values():
+                if (tf.get("group_name") or "") != group_name:
+                    continue
+                if (tf.get("data_type") or "").strip().lower() != "reference_cal_date":
+                    continue
+                ref1_name = tf.get("calc_ref1_name")
+                if not ref1_name:
+                    continue
+                id_or_tag = (_get_value(ref1_name) or "").strip()
+                if not id_or_tag:
+                    continue
+                try:
+                    inst = self.repo.get_instrument_by_id_or_tag(id_or_tag)
+                    formatted = inst.last_cal_date if (inst and inst.last_cal_date) else "—"
+                except Exception:
+                    formatted = "—"
+                tname = (tf.get("name") or "").strip()
+                tlabel = (tf.get("label") or "").strip()
+                if tname:
+                    _add_key(values_by_name, tname, formatted)
+                if tlabel:
+                    _add_key(values_by_name, tlabel, formatted)
 
         for group_name in groups_order:
             group_vals = groups_vals[group_name]
@@ -3257,28 +3436,62 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
 
             _convert_pass_for_group(values_by_name, group_name, lambda n: _get_ref_value(n), _get_ref_value_and_unit, _parse_numeric_stripping_unit)
 
-            def _point_prefix(ref1_name, ref2_name):
-                """Label and value of the two refs used to calculate this point. Replaces group name."""
-                def _find_label(rn):
-                    if not (rn or "").strip():
-                        return None
-                    rc = (rn or "").strip()
-                    rl = rc.lower()
-                    for tf in template_fields:
-                        n = (tf.get("name") or "").strip()
-                        l = (tf.get("label") or "").strip()
-                        if n.lower() == rl or l.lower() == rl:
-                            return l if l else n
-                    return rc
+            def _find_label(rn):
+                if not (rn or "").strip():
+                    return None
+                rc = (rn or "").strip()
+                rl = rc.lower()
+                for tf in template_fields:
+                    n = (tf.get("name") or "").strip()
+                    l = (tf.get("label") or "").strip()
+                    if n.lower() == rl or l.lower() == rl:
+                        return l if l else n
+                return rc
+
+            def _ref_points_to_checked_number(ref_name):
+                """True if ref_name matches a number or convert field with appear_in_calibrations_table."""
+                if not (ref_name or "").strip():
+                    return False
+                rl = (ref_name or "").strip().lower()
+                for nf in fields_in_group:
+                    if (nf.get("data_type") or "").strip().lower() not in ("number", "convert"):
+                        continue
+                    if not nf.get("appear_in_calibrations_table"):
+                        continue
+                    n = (nf.get("name") or "").strip().lower()
+                    l = (nf.get("label") or "").strip().lower()
+                    if n == rl or l == rl:
+                        return True
+                return False
+
+            def _variables_string(ref1_name, ref2_name, include_checked_numbers=True):
+                """Build Variables column: refs (excluding those that are checked numbers) and number/convert fields with appear_in_calibrations_table."""
                 parts = []
                 for rn in ((ref1_name or "").strip(), (ref2_name or "").strip()):
                     if not rn:
                         continue
+                    if _ref_points_to_checked_number(rn):
+                        continue  # skip; will be shown in checked numbers
                     lbl = _find_label(rn)
                     val = _get_value(rn)
                     val_str = str(val).strip() if val not in (None, "") else "—"
-                    parts.append(f"{lbl or rn} ({val_str})")
-                return ", ".join(parts) + ": " if parts else ""
+                    parts.append(f"{lbl or rn}: {val_str}")
+                if include_checked_numbers:
+                    for nf in fields_in_group:
+                        if (nf.get("data_type") or "").strip().lower() not in ("number", "convert"):
+                            continue
+                        if not (nf.get("appear_in_calibrations_table") or nf.get("id") == fid):
+                            continue
+                        nf_label = (nf.get("label") or nf.get("name") or "").strip()
+                        if not nf_label:
+                            continue
+                        nf_val = by_field_id.get(nf.get("id"), {})
+                        nf_val_txt = nf_val.get("value_text")
+                        if nf_val_txt is None:
+                            nf_val_txt = _get_value((nf.get("name") or "").strip())
+                        nf_val_str = str(nf_val_txt).strip() if nf_val_txt not in (None, "") else "—"
+                        parts.append(f"{nf_label}: {nf_val_str}")
+                return ", ".join(parts) if parts else ""
 
             by_field_id = {v.get("field_id"): v for v in group_vals}
             fields_in_group = [f for f in template_fields_by_id.values() if (f.get("group_name") or "") == group_name]
@@ -3299,7 +3512,8 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                 v_merged = dict(v)
                 for key in ("group_name", "label", "unit", "calc_type", "data_type", "tolerance_type",
                             "tolerance_equation", "tolerance", "nominal_value", "tolerance_lookup_json",
-                            "calc_ref1_name", "calc_ref2_name", "calc_ref3_name", "calc_ref4_name", "calc_ref5_name"):
+                            "calc_ref1_name", "calc_ref2_name", "calc_ref3_name", "calc_ref4_name", "calc_ref5_name",
+                            "appear_in_calibrations_table"):
                     if (v_merged.get(key) is None or v_merged.get(key) == "") and tf.get(key) not in (None, ""):
                         v_merged[key] = tf[key]
                 v_merged["field_id"] = fid
@@ -3393,14 +3607,13 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                     elif tol_fixed is not None:
                         status = "\u2713 PASS" if diff <= tol_fixed else "\u2717 FAIL"
 
-                    pt = _point_prefix(ref1_name, ref2_name)
-                    point_str = f"{pt}{label}"
+                    variables_str = _variables_string(ref1_name, ref2_name)
                     if display_parts is not None:
                         lhs, op_str, rhs, pass_ = display_parts
                         from tolerance_service import format_calculation_display
                         _dec = max(0, min(4, int(v.get("sig_figs") or f.get("sig_figs") or 3)))
-                        val_str = f"{format_calculation_display(lhs, decimal_places=_dec)} {op_str} {format_calculation_display(rhs, decimal_places=_dec)}"
-                        _add_row(group_name, point_str, val_str, "", "PASS" if pass_ else "FAIL")
+                        tol_val_str = f"{format_calculation_display(lhs, decimal_places=_dec)} {op_str} {format_calculation_display(rhs, decimal_places=_dec)}"
+                        _add_row(group_name, variables_str, f"{label}: {tol_val_str}", "", "PASS" if pass_ else "FAIL")
                     else:
                         try:
                             num_val = float(str(val_txt).strip())
@@ -3410,7 +3623,10 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                         except (TypeError, ValueError):
                             val_display = val_txt
                         res = ("\u2713 PASS" if "PASS" in (status or "") else "\u2717 FAIL") if status else ""
-                        _add_row(group_name, point_str, f"{val_display}{unit_str}", tol_used, res)
+                        tol_display = f"{val_display}{unit_str}"
+                        if tol_used:
+                            tol_display += tol_used
+                        _add_row(group_name, variables_str, f"{label}: {tol_display}", "", res)
                     continue
 
                 # 2) Convert-type fields: do not display in tolerance (pass/fail) section
@@ -3421,10 +3637,9 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                 if data_type == "bool" and tol_type == "bool":
                     pass_when = (v.get("tolerance_equation") or "true").strip().lower()
                     reading_bool = val_txt in ("1", "true", "yes", "on")
-                    pt = _point_prefix(None, None)  # bool has no two refs
-                    point_str = f"{pt}{label}"
+                    variables_str = _variables_string(None, None)  # bool has no refs; may have checked numbers
                     if pass_when not in ("true", "false"):
-                        _add_row(group_name, point_str, "Pass" if reading_bool else "Fail", "", "")
+                        _add_row(group_name, variables_str, f"{label}: {'Pass' if reading_bool else 'Fail'}", "", "")
                         continue
                     reading_float = 1.0 if reading_bool else 0.0
                     result = "Fail"
@@ -3437,7 +3652,7 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                             result = "Pass" if pass_ else "Fail"
                         except Exception:
                             pass
-                    _add_row(group_name, point_str, "", "", result)
+                    _add_row(group_name, variables_str, f"{label}: {result}", "", result)
                     continue
 
                 # 4) Tolerance-type (data_type "tolerance") fields: not stored; evaluate from this group's values (in sort order)
@@ -3486,17 +3701,17 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                             required = list_variables(eq)
                             ref1 = f.get("calc_ref1_name")
                             ref2 = f.get("calc_ref2_name")
-                            pt = _point_prefix(ref1, ref2)
+                            variables_str = _variables_string(ref1, ref2)
                             if any(var not in vars_map for var in required):
                                 missing = [var for var in required if var not in vars_map]
-                                _add_row(group_name, f"{pt}{label}", f"— (need: {', '.join(missing)})", "", "")
+                                _add_row(group_name, variables_str, f"{label}: — (need: {', '.join(missing)})", "", "")
                             else:
                                 parts = equation_tolerance_display(eq, vars_map)
                                 if parts is not None:
                                     lhs, op_str, rhs, pass_ = parts
                                     _dec = max(0, min(4, int(f.get("sig_figs") or 3)))
                                     val_str = f"{format_calculation_display(lhs, decimal_places=_dec)} {op_str} {format_calculation_display(rhs, decimal_places=_dec)}"
-                                    _add_row(group_name, f"{pt}{label}", val_str, "", "PASS" if pass_ else "FAIL")
+                                    _add_row(group_name, variables_str, f"{label}: {val_str}", "", "PASS" if pass_ else "FAIL")
                                 elif evaluate_pass_fail:
                                     try:
                                         reading = vars_map.get("reading", 0.0)
@@ -3504,7 +3719,7 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                                             "equation", None, eq, nominal, reading,
                                             vars_map=vars_map, tolerance_lookup_json=None,
                                         )
-                                        _add_row(group_name, f"{pt}{label}", "", "", "PASS" if pass_ else "FAIL")
+                                        _add_row(group_name, variables_str, f"{label}: PASS" if pass_ else f"{label}: FAIL", "", "PASS" if pass_ else "FAIL")
                                     except Exception:
                                         pass
                         except (ImportError, ValueError, TypeError):
@@ -3546,17 +3761,17 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                             required = list_variables(eq)
                             ref1 = f.get("calc_ref1_name")
                             ref2 = f.get("calc_ref2_name")
-                            pt = _point_prefix(ref1, ref2)
+                            variables_str = _variables_string(ref1, ref2)
                             if any(var not in vars_map for var in required):
                                 missing = [var for var in required if var not in vars_map]
-                                _add_row(group_name, f"{pt}{label}", f"— (need: {', '.join(missing)})", "", "")
+                                _add_row(group_name, variables_str, f"{label}: — (need: {', '.join(missing)})", "", "")
                             else:
                                 result = evaluate_tolerance_equation(eq, vars_map)
                                 _dec = max(0, min(4, int(f.get("sig_figs") or 3)))
-                                _add_row(group_name, f"{pt}{label}", format_calculation_display(result, decimal_places=_dec), "", "")
+                                _add_row(group_name, variables_str, f"{label}: {format_calculation_display(result, decimal_places=_dec)}", "", "")
                         except (ImportError, ValueError, TypeError):
-                            pt = _point_prefix(f.get("calc_ref1_name"), f.get("calc_ref2_name"))
-                            _add_row(group_name, f"{pt}{label}", "—", "", "")
+                            variables_str = _variables_string(f.get("calc_ref1_name"), f.get("calc_ref2_name"))
+                            _add_row(group_name, variables_str, f"{label}: —", "", "")
                     continue
 
                 # 5) Other fields with value and tolerance (number, reference, equation, percent, lookup)
@@ -3594,14 +3809,13 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                             pass
                     ref1 = v.get("calc_ref1_name")
                     ref2 = v.get("calc_ref2_name")
-                    pt = _point_prefix(ref1, ref2)
-                    point_str = f"{pt}{label}"
+                    variables_str = _variables_string(ref1, ref2)
                     if display_parts is not None:
                         lhs, op_str, rhs, pass_ = display_parts
                         from tolerance_service import format_calculation_display
                         _dec = max(0, min(4, int(v.get("sig_figs") or f.get("sig_figs") or 3)))
                         val_str = f"{format_calculation_display(lhs, decimal_places=_dec)} {op_str} {format_calculation_display(rhs, decimal_places=_dec)}"
-                        _add_row(group_name, point_str, val_str, "", "PASS" if pass_ else "FAIL")
+                        _add_row(group_name, variables_str, f"{label}: {val_str}", "", "PASS" if pass_ else "FAIL")
                     else:
                         try:
                             from tolerance_service import format_calculation_display
@@ -3631,7 +3845,7 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                                 res = "\u2713 PASS" if pass_ else "\u2717 FAIL"
                             except Exception:
                                 pass
-                        _add_row(group_name, point_str, f"{val_display}{unit_str}", "", res)
+                        _add_row(group_name, variables_str, f"{label}: {val_display}{unit_str}", "", res)
                     continue
 
         # Which groups have any FAIL (for row highlighting)
@@ -4004,6 +4218,7 @@ class TemplatesDialog(QtWidgets.QDialog):
                     f.get("plot_y_min"),
                     f.get("plot_y_max"),
                     bool(f.get("plot_best_fit", 0)),
+                    bool(f.get("appear_in_calibrations_table", 0)),
                 )
             self._load_templates()
             QtWidgets.QMessageBox.information(
@@ -4385,6 +4600,8 @@ class CalibrationFormDialog(QtWidgets.QDialog):
 
         self._connect_convert_updates()
         self._update_convert_fields()
+        self._update_stat_fields()
+        self._update_reference_cal_date_fields()
 
         # Sync Cal date to all date-type fields (so they match when form is first built)
         if hasattr(self, "date_edit"):
@@ -4470,6 +4687,12 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             w.setReadOnly(True)
             w.setPlaceholderText("—")
             w.setText("—")
+        elif data_type == "reference_cal_date":
+            w = QtWidgets.QLineEdit()
+            w.setMinimumWidth(STANDARD_FIELD_WIDTH)
+            w.setReadOnly(True)
+            w.setPlaceholderText("—")
+            w.setText("—")
         elif data_type == "field_header":
             w = QtWidgets.QLabel(f.get("label") or f.get("name") or "—")
             font = w.font()
@@ -4526,11 +4749,11 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             return None
 
     def _get_current_values_by_name(self) -> dict[str, str]:
-        """Current form values by field name (from widgets). Excludes tolerance, convert, stat, and field_header (display-only)."""
+        """Current form values by field name (from widgets). Excludes tolerance, convert, stat, reference_cal_date, and field_header (display-only)."""
         out = {}
         for f in self.fields:
             dt = f.get("data_type") or ""
-            if dt in ("tolerance", "convert", "stat", "field_header"):
+            if dt in ("tolerance", "convert", "stat", "reference_cal_date", "field_header"):
                 continue
             fid = f["id"]
             name = (f.get("name") or f.get("field_name") or "").strip()
@@ -4585,6 +4808,31 @@ class CalibrationFormDialog(QtWidgets.QDialog):
             except (ValueError, TypeError):
                 w.setText("—")
 
+    def _update_reference_cal_date_fields(self):
+        """Update reference_cal_date widgets: look up instrument by ref1 value, display last_cal_date."""
+        values_by_name = self._get_current_values_by_name()
+        for f in self.fields:
+            if (f.get("data_type") or "").strip().lower() != "reference_cal_date":
+                continue
+            ref1_name = f.get("calc_ref1_name")
+            if not ref1_name or ref1_name not in values_by_name:
+                continue
+            id_or_tag = (values_by_name.get(ref1_name) or "").strip()
+            if not id_or_tag:
+                continue
+            fid = f["id"]
+            w = self.field_widgets.get(fid)
+            if not w or not hasattr(w, "setText"):
+                continue
+            try:
+                inst = self.repo.get_instrument_by_id_or_tag(id_or_tag)
+                if inst and inst.last_cal_date:
+                    w.setText(inst.last_cal_date)
+                else:
+                    w.setText("—")
+            except Exception:
+                w.setText("—")
+
     def _update_stat_fields(self):
         """Update read-only stat field widgets from current input values and equations."""
         try:
@@ -4621,13 +4869,17 @@ class CalibrationFormDialog(QtWidgets.QDialog):
                 w.setText("—")
 
     def _connect_convert_updates(self):
-        """Connect input widgets so convert and stat fields update when user types."""
+        """Connect input widgets so convert, stat, and reference_cal_date fields update when user types."""
         def schedule_update():
-            QtCore.QTimer.singleShot(0, lambda: (self._update_convert_fields(), self._update_stat_fields()))
+            QtCore.QTimer.singleShot(0, lambda: (
+                self._update_convert_fields(),
+                self._update_stat_fields(),
+                self._update_reference_cal_date_fields(),
+            ))
 
         for f in self.fields:
             dt = f.get("data_type") or ""
-            if dt in ("tolerance", "convert", "stat"):
+            if dt in ("tolerance", "convert", "stat", "reference_cal_date"):
                 continue
             fid = f["id"]
             w = self.field_widgets.get(fid)
@@ -5133,12 +5385,12 @@ class CalibrationFormDialog(QtWidgets.QDialog):
                 w.setText("—")
 
     def _collect_field_values(self) -> dict[int, str] | None:
-        """Collect user-entered values from widgets. Returns None if validation fails. Skips tolerance- and convert-type (computed) fields."""
+        """Collect user-entered values from widgets. Returns None if validation fails. Skips tolerance-, convert-, and reference_cal_date-type (computed) fields."""
         field_values: dict[int, str] = {}
         for f in self.fields:
             fid = f["id"]
             dt = f["data_type"]
-            if dt in ("tolerance", "convert", "stat", "field_header"):
+            if dt in ("tolerance", "convert", "stat", "reference_cal_date", "field_header"):
                 continue
             w = self.field_widgets.get(fid)
             if w is None:
@@ -5329,6 +5581,26 @@ class CalibrationFormDialog(QtWidgets.QDialog):
                 except (ValueError, TypeError):
                     field_values[fid] = ""
 
+        # Reference cal date: value = last_cal_date of instrument matching ref1 (ID or tag)
+        for f in self.fields:
+            if (f.get("data_type") or "").strip().lower() != "reference_cal_date":
+                continue
+            ref1_name = f.get("calc_ref1_name")
+            if not ref1_name or ref1_name not in values_by_name:
+                continue
+            id_or_tag = (values_by_name.get(ref1_name) or "").strip()
+            if not id_or_tag:
+                continue
+            fid = f["id"]
+            try:
+                inst = self.repo.get_instrument_by_id_or_tag(id_or_tag)
+                if inst and inst.last_cal_date:
+                    field_values[fid] = inst.last_cal_date
+                else:
+                    field_values[fid] = ""
+            except Exception:
+                field_values[fid] = ""
+
         # If you ever add more calc types, handle them here.
 
     def _check_tolerance_pass_fail(
@@ -5472,7 +5744,7 @@ class CalibrationFormDialog(QtWidgets.QDialog):
         # Skip convert: they are computed display values, not tolerance checks.
         if not any_out_of_tol and evaluate_pass_fail:
             for f in self.fields:
-                if f.get("calc_type") or (f.get("data_type") or "") == "bool" or (f.get("data_type") or "") == "tolerance" or (f.get("data_type") or "") == "convert" or (f.get("data_type") or "") == "stat":
+                if f.get("calc_type") or (f.get("data_type") or "") == "bool" or (f.get("data_type") or "") == "tolerance" or (f.get("data_type") or "") == "convert" or (f.get("data_type") or "") == "stat" or (f.get("data_type") or "") == "reference_cal_date":
                     continue
                 tol_type = (f.get("tolerance_type") or "fixed").lower()
                 if not f.get("tolerance_equation") and f.get("tolerance") is None and tol_type not in ("equation", "percent", "lookup"):

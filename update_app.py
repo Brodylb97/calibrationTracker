@@ -112,6 +112,66 @@ def _fetch_via_github_api(owner, repo, branch, path, timeout_seconds=15):
     return None
 
 
+def _parse_github_latest_download_url(url):
+    """
+    If url is https://github.com/OWNER/REPO/releases/latest/download/ASSET.zip
+    return (owner, repo, asset_name); otherwise return None.
+    """
+    if not url or "github.com" not in url or "/releases/latest/download/" not in url:
+        return None
+    try:
+        # https://github.com/owner/repo/releases/latest/download/filename.zip
+        after = url.split("github.com/", 1)[-1]
+        parts = after.split("/releases/latest/download/", 1)
+        if len(parts) != 2:
+            return None
+        owner_repo = parts[0].strip("/").split("/")
+        if len(owner_repo) < 2:
+            return None
+        owner, repo = owner_repo[0], owner_repo[1]
+        asset_name = (parts[1].split("?")[0] or "").strip("/") or None
+        if not asset_name:
+            return None
+        return (owner, repo, asset_name)
+    except Exception:
+        return None
+
+
+def resolve_github_latest_release(owner, repo, asset_name, timeout_seconds=15):
+    """
+    Use GitHub API GET /repos/OWNER/REPO/releases/latest to get the actual
+    latest release version (tag_name) and download URL for the given asset.
+    Returns (version_string, download_url) or (None, None) on failure.
+    """
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+    headers = {"User-Agent": "CalibrationTracker-Updater/1.0", "Accept": "application/vnd.github.v3+json"}
+    try:
+        if HAS_REQUESTS:
+            r = requests.get(api_url, headers=headers, timeout=timeout_seconds)
+            if r.status_code != 200:
+                return None, None
+            data = r.json()
+        elif urlopen and Request:
+            req = Request(api_url, headers=headers)
+            with urlopen(req, timeout=timeout_seconds) as r:
+                data = json.loads(r.read().decode("utf-8", errors="replace"))
+        else:
+            return None, None
+        tag = (data.get("tag_name") or "").strip()
+        if tag.startswith("v"):
+            tag = tag[1:]
+        if not tag:
+            return None, None
+        for asset in data.get("assets") or []:
+            if (asset.get("name") or "") == asset_name:
+                url = (asset.get("browser_download_url") or "").strip()
+                if url:
+                    return tag, url
+        return None, None
+    except Exception:
+        return None, None
+
+
 def fetch_remote_version(remote_version_url, timeout_seconds=15):
     """Fetch latest version string. Tries GitHub API first when URL is raw GitHub to avoid cache."""
     owner = repo = branch = path = None
@@ -240,15 +300,32 @@ def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=
         except (ValueError, TypeError):
             pass
 
-    if not skip_version_check and remote_version_url:
+    # When package URL is GitHub releases/latest, resolve to actual latest version and URL
+    # so we update to the real latest in one step and write the correct version.
+    resolved_version = None
+    resolved_download_url = None
+    gh = _parse_github_latest_download_url(remote_package_url)
+    if gh:
+        owner, repo, asset_name = gh
+        resolved_version, resolved_download_url = resolve_github_latest_release(owner, repo, asset_name)
+    if resolved_download_url:
+        remote_package_url = resolved_download_url
+
+    if not skip_version_check:
         try:
             current_str = get_current_version(config)
-            remote_str = fetch_remote_version(remote_version_url)
-            local_tup = parse_version(current_str)
-            remote_tup = parse_version(remote_str)
-            if not is_newer_version(local_tup, remote_tup):
-                print("No update required: already at latest version.")
-                return
+            if resolved_version is not None:
+                remote_str = resolved_version
+            elif remote_version_url:
+                remote_str = fetch_remote_version(remote_version_url)
+            else:
+                remote_str = None
+            if remote_str is not None:
+                local_tup = parse_version(current_str)
+                remote_tup = parse_version(remote_str)
+                if not is_newer_version(local_tup, remote_tup):
+                    print("No update required: already at latest version.")
+                    return
         except Exception as e:
             print(f"Version check failed: {e}", file=sys.stderr)
             raise
@@ -277,10 +354,14 @@ def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=
             exclude_patterns=["*.db", "*.db-journal", "*.db-wal", "*.db-shm", "logs", "backups", "update_config.json", ".update_temp"],
         )
 
-        # Persist new version if we have it
+        # Persist new version if we have it (prefer resolved release version)
         try:
-            remote_str = fetch_remote_version(remote_version_url)
-            (app_dir / current_version_file).write_text(remote_str, encoding="utf-8")
+            if resolved_version is not None:
+                (app_dir / current_version_file).write_text(resolved_version, encoding="utf-8")
+            elif remote_version_url:
+                remote_str = fetch_remote_version(remote_version_url)
+                if remote_str:
+                    (app_dir / current_version_file).write_text(remote_str, encoding="utf-8")
         except Exception:
             pass
 

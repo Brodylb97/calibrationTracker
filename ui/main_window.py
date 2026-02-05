@@ -139,6 +139,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_templates.setShortcut(QtGui.QKeySequence("Ctrl+T"))
         self.act_templates.setToolTip("Manage calibration templates (Ctrl+T)")
         self.act_templates.triggered.connect(self.on_templates)
+
+        self.act_batch_refresh_template = QtWidgets.QAction("Batch Refresh Template", self)
+        self.act_batch_refresh_template.setToolTip(
+            "Re-apply current template field definitions to filled calibration records for selected instruments. "
+            "Use after editing template fields to refresh labels, tolerances, etc."
+        )
+        self.act_batch_refresh_template.triggered.connect(self.on_batch_refresh_template)
         
         self.act_dest = QtWidgets.QAction("Destinations", self)
         self.act_dest.setToolTip("Manage calibration destinations")
@@ -210,6 +217,7 @@ class MainWindow(QtWidgets.QMainWindow):
         cal_menu.addAction(self.act_hist)
         cal_menu.addSeparator()
         cal_menu.addAction(self.act_templates)
+        cal_menu.addAction(self.act_batch_refresh_template)
 
         # Tools - reference data and operations
         tools_menu = menubar.addMenu("&Tools")
@@ -887,6 +895,116 @@ class MainWindow(QtWidgets.QMainWindow):
     def on_templates(self):
         dlg = TemplatesDialog(self.repo, parent=self)
         dlg.exec_()
+
+    def on_batch_refresh_template(self):
+        """Re-apply current template field definitions to filled calibration records for selected instruments."""
+        selected_ids = self._selected_instrument_ids()
+        if not selected_ids:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Batch Refresh Template",
+                "Please select one or more instruments in the table.",
+            )
+            return
+
+        records = self.repo.list_all_calibration_records(include_archived=False)
+        selected_set = set(selected_ids)
+        # Only records for selected instruments that are editable (Draft) and have calibration values (filled out)
+        editable = []
+        for rec in records:
+            if rec["instrument_id"] not in selected_set:
+                continue
+            state = (rec.get("record_state") or "Draft").strip()
+            if state in ("Approved", "Archived"):
+                continue
+            vals = self.repo.get_calibration_values(rec["id"])
+            if not vals:
+                continue
+            editable.append(rec)
+
+        if not editable:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Batch Refresh Template",
+                "No calibration records to refresh for the selected instrument(s).\n\n"
+                "Records must be editable (Draft) and have at least one field value.",
+            )
+            return
+
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Batch Refresh Template",
+            f"This will re-apply the current template field definitions to {len(editable)} calibration record(s).\n\n"
+            "Use this after editing template fields (labels, tolerances, etc.) to refresh all calibrations.\n\n"
+            "Proceed?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        progress = QtWidgets.QProgressDialog(
+            "Refreshing calibration records...",
+            "Cancel",
+            0,
+            len(editable),
+            self,
+        )
+        progress.setWindowModality(QtCore.Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        refreshed = 0
+        failed = []
+        for i, rec in enumerate(editable):
+            if progress.wasCanceled():
+                break
+            progress.setLabelText(f"Refreshing {rec.get('tag_number', '')} ({rec.get('cal_date', '')})...")
+            progress.setValue(i)
+
+            inst = self.repo.get_instrument(rec["instrument_id"])
+            if not inst:
+                failed.append(f"Record {rec['id']} (instrument not found)")
+                continue
+
+            dlg = CalibrationFormDialog(
+                self.repo, inst, record_id=rec["id"], parent=self, read_only=False
+            )
+            loop = QtCore.QEventLoop()
+            closed = [False]
+
+            def on_finished():
+                closed[0] = True
+                loop.quit()
+
+            dlg.finished.connect(on_finished)
+            dlg.show()
+            QtWidgets.QApplication.processEvents()
+            QtCore.QTimer.singleShot(200, dlg.accept)
+
+            # Timeout after 15 seconds in case validation fails and dialog stays open
+            timeout = QtCore.QTimer(self)
+            timeout.setSingleShot(True)
+            timeout.timeout.connect(loop.quit)
+            timeout.start(15000)
+
+            loop.exec_()
+            timeout.stop()
+
+            if closed[0]:
+                refreshed += 1
+            else:
+                dlg.reject()
+                failed.append(f"{rec.get('tag_number', '')} ({rec.get('cal_date', '')})")
+
+        progress.setValue(len(editable))
+        progress.close()
+
+        self.load_instruments()
+        msg = f"Refreshed {refreshed} calibration record(s)."
+        if failed:
+            msg += f"\n\nSkipped or failed: {len(failed)}"
+        QtWidgets.QMessageBox.information(self, "Batch Refresh Template", msg)
 
     def on_send_reminders(self):
         self.act_reminders.setEnabled(False)

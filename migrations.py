@@ -720,6 +720,86 @@ def migrate_15_add_field_header_type(conn: sqlite3.Connection) -> None:
     logger.info("Migration 15 applied: added 'field_header' type to calibration_template_fields")
 
 
+def migrate_16_add_reference_cal_date_type(conn: sqlite3.Connection) -> None:
+    """Add 'reference_cal_date' to data_type CHECK. Displays last_cal_date of instrument referenced by another field."""
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='calibration_template_fields'"
+    )
+    row = cur.fetchone()
+    if row and row[0] and "reference_cal_date" in (row[0] or ""):
+        return
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        cur.execute("PRAGMA table_info(calibration_template_fields)")
+        old_cols = [r[1] for r in cur.fetchall()]
+        # Include appear_in_calibrations_table if it exists (added by database.py)
+        has_appear = "appear_in_calibrations_table" in old_cols
+        appear_sql = ", appear_in_calibrations_table INTEGER NOT NULL DEFAULT 0" if has_appear else ""
+        cur.execute(
+            f"""
+            CREATE TABLE calibration_template_fields_new (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id     INTEGER NOT NULL REFERENCES calibration_templates(id) ON DELETE CASCADE,
+                name            TEXT NOT NULL,
+                label           TEXT NOT NULL,
+                data_type       TEXT NOT NULL CHECK (data_type IN ('text', 'number', 'bool', 'date', 'signature', 'reference', 'tolerance', 'convert', 'stat', 'plot', 'non_affected_date', 'field_header', 'reference_cal_date')),
+                unit            TEXT,
+                required        INTEGER NOT NULL DEFAULT 0,
+                sort_order      INTEGER NOT NULL DEFAULT 0,
+                group_name      TEXT,
+                calc_type       TEXT,
+                calc_ref1_name  TEXT,
+                calc_ref2_name  TEXT,
+                calc_ref3_name  TEXT,
+                calc_ref4_name  TEXT,
+                calc_ref5_name  TEXT,
+                calc_ref6_name  TEXT,
+                calc_ref7_name  TEXT,
+                calc_ref8_name  TEXT,
+                calc_ref9_name  TEXT,
+                calc_ref10_name TEXT,
+                calc_ref11_name TEXT,
+                calc_ref12_name TEXT,
+                tolerance       REAL,
+                autofill_from_first_group INTEGER NOT NULL DEFAULT 0,
+                default_value   TEXT,
+                tolerance_type  TEXT,
+                tolerance_equation TEXT,
+                nominal_value   TEXT,
+                tolerance_lookup_json TEXT,
+                sig_figs        INTEGER DEFAULT 3,
+                stat_value_group TEXT,
+                plot_x_axis_name TEXT,
+                plot_y_axis_name TEXT,
+                plot_title      TEXT,
+                plot_x_min      REAL,
+                plot_x_max      REAL,
+                plot_y_min      REAL,
+                plot_y_max      REAL,
+                plot_best_fit   INTEGER NOT NULL DEFAULT 0
+                {appear_sql}
+            )
+            """
+        )
+        sel_list = ", ".join(old_cols)
+        ins_list = ", ".join(old_cols)
+        cur.execute(
+            f"INSERT INTO calibration_template_fields_new ({ins_list}) SELECT {sel_list} FROM calibration_template_fields"
+        )
+        cur.execute("DROP TABLE calibration_template_fields")
+        cur.execute("ALTER TABLE calibration_template_fields_new RENAME TO calibration_template_fields")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_template_id ON calibration_template_fields(template_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_template_fields_sort_order ON calibration_template_fields(template_id, sort_order)")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    logger.info("Migration 16 applied: added 'reference_cal_date' type to calibration_template_fields")
+
+
 def _migration_lock_path(db_path) -> "Path | None":
     """Path to advisory lock file next to the database."""
     if db_path is None:
@@ -820,3 +900,6 @@ def _run_migrations_impl(conn: sqlite3.Connection) -> None:
     if version < 15:
         migrate_15_add_field_header_type(conn)
         set_schema_version(conn, 15)
+    if version < 16:
+        migrate_16_add_reference_cal_date_type(conn)
+        set_schema_version(conn, 16)
