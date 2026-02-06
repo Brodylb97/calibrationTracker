@@ -19,22 +19,24 @@ def main():
     app_dir = _app_base_dir()
     print("1. App dir (install/source):", app_dir)
     print("2. Running from frozen exe:", getattr(sys, "frozen", False))
+    updater_exe = app_dir / "CalibrationTrackerUpdater.exe"
     updater_script = app_dir / "update_app.py"
-    print("3. update_app.py exists:", updater_script.is_file())
-    print("4. update_config.json exists:", (app_dir / "update_config.json").is_file())
+    print("3. CalibrationTrackerUpdater.exe exists:", updater_exe.is_file(), "(no Python on PATH needed)" if updater_exe.is_file() else "")
+    print("4. update_app.py exists:", updater_script.is_file())
+    print("5. update_config.json exists:", (app_dir / "update_config.json").is_file())
     try:
         import shutil
         py = shutil.which("python") or shutil.which("python3")
-        print("5. Python on PATH:", py or "(not found – updater will not start from installed exe)")
+        print("6. Python on PATH:", py or "(not needed if CalibrationTrackerUpdater.exe exists)" if updater_exe.is_file() else "(required if no updater exe)")
     except Exception as e:
-        print("5. Python on PATH: (check failed)", e)
+        print("6. Python on PATH: (check failed)", e)
     avail, cur, latest, err = is_update_available()
-    print("6. Current version:", cur)
-    print("7. Latest version (remote):", latest)
-    print("8. Update available:", avail)
-    print("9. Error from check:", err or "(none)")
+    print("7. Current version:", cur)
+    print("8. Latest version (remote):", latest)
+    print("9. Update available:", avail)
+    print("10. Error from check:", err or "(none)")
     log_path = Path(os.environ.get("TEMP", ".")) / "CalibrationTracker_updater.log"
-    print("10. Updater log file:", log_path)
+    print("11. Updater log file:", log_path)
     if log_path.exists():
         with open(log_path, "r", encoding="utf-8") as f:
             lines = f.readlines()

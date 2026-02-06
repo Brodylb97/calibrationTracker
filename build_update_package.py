@@ -23,6 +23,7 @@ OUTPUT_ZIP = SCRIPT_DIR / "installer" / "CalibrationTracker-windows.zip"
 FILES = [
     ("dist/CalibrationTracker.exe", "CalibrationTracker.exe"),
     ("dist/RestartHelper.exe", "RestartHelper.exe"),
+    ("dist/CalibrationTrackerUpdater.exe", "CalibrationTrackerUpdater.exe"),
     ("update_app.py", "update_app.py"),
     ("update_checker.py", "update_checker.py"),
     ("update_config.example.json", "update_config.example.json"),
@@ -41,6 +42,8 @@ def main():
         raise SystemExit(1)
     if not (DIST / "RestartHelper.exe").exists():
         print("WARNING: dist/RestartHelper.exe not found. Run restart_helper\\build.bat and copy to dist\\")
+    if not (DIST / "CalibrationTrackerUpdater.exe").exists():
+        print("WARNING: dist/CalibrationTrackerUpdater.exe not found. Run build_executable.bat (includes updater build).")
 
     OUTPUT_ZIP.parent.mkdir(parents=True, exist_ok=True)
 

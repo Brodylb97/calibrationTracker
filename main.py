@@ -117,7 +117,6 @@ def main():
         default=None,
         help="Path to server SQLite database (only the server path is accepted; no local copies)",
     )
-
     args = parser.parse_args()
     # Only the server database is allowed; no local copies.
     persisted = get_persisted_last_db_path()

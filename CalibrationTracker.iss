@@ -3,7 +3,7 @@
 
 #define MyAppName "Calibration Tracker"
 ; Keep MyAppVersion in sync with the VERSION file in the repo root
-#define MyAppVersion "3.2.9"
+#define MyAppVersion "3.3.0"
 #define MyAppPublisher "Air Hygiene International, Inc."
 #define MyAppURL "https://www.airhygiene.com/"
 #define MyAppExeName "CalibrationTracker.exe"
@@ -48,6 +48,8 @@ Name: "quicklaunchicon"; Description: "{cm:CreateQuickLaunchIcon}"; GroupDescrip
 Source: "dist\CalibrationTracker.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; Stub used to reopen the app after an update (updater runs this; it reads params and launches main exe)
 Source: "dist\RestartHelper.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Standalone updater exe (no Python on PATH needed for "Update now")
+Source: "dist\CalibrationTrackerUpdater.exe"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 ; Signatures folder
 Source: "Signatures\*"; DestDir: "{app}\Signatures"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Logo file for PDF exports

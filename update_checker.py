@@ -290,21 +290,25 @@ def trigger_update_script(wait_for_pid=None, config_path=None, restore_db_path=N
     """
     app_dir = _app_base_dir()
     config_path = Path(config_path or os.environ.get(CONFIG_PATH_ENV) or _default_config_path())
+    # Prefer standalone updater exe (no Python on PATH needed); fall back to python update_app.py
+    updater_exe = app_dir / "CalibrationTrackerUpdater.exe"
     updater_script = app_dir / "update_app.py"
-    if not updater_script.is_file():
-        return False
-    # When frozen: must run "python update_app.py" (Python on PATH); when from source: sys.executable is python
-    if getattr(sys, "frozen", False):
-        try:
-            import shutil
-            python_exe = shutil.which("python") or shutil.which("python3")
-        except Exception:
-            python_exe = None
-        if not python_exe:
-            return False  # "Update now" requires Python on PATH when running the installed exe
-        cmd = [python_exe, str(updater_script)]
+    if getattr(sys, "frozen", False) and updater_exe.is_file():
+        cmd = [str(updater_exe)]
+    elif updater_script.is_file():
+        if getattr(sys, "frozen", False):
+            try:
+                import shutil
+                python_exe = shutil.which("python") or shutil.which("python3")
+            except Exception:
+                python_exe = None
+            if not python_exe:
+                return False  # No updater exe and Python not on PATH
+            cmd = [python_exe, str(updater_script)]
+        else:
+            cmd = [sys.executable, str(updater_script)]
     else:
-        cmd = [sys.executable, str(updater_script)]
+        return False
     if config_path.is_file():
         cmd.extend(["--config", str(config_path)])
     if wait_for_pid is not None:

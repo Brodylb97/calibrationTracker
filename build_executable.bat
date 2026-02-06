@@ -61,6 +61,15 @@ if exist restart_helper\RestartHelper.exe (
     echo WARNING: restart_helper\RestartHelper.exe not found. Run restart_helper\build.bat first, then copy RestartHelper.exe to dist\ before building the installer.
 )
 
+REM Build standalone updater exe (no Python on PATH needed for "Update now")
+echo Building CalibrationTrackerUpdater.exe...
+py -m PyInstaller --name=CalibrationTrackerUpdater --onefile --noconsole --hidden-import=requests update_app.py
+if errorlevel 1 (
+    echo WARNING: Updater build failed. "Update now" will require Python on PATH.
+) else (
+    echo CalibrationTrackerUpdater.exe built.
+)
+
 echo.
 echo ========================================
 echo Build complete!
