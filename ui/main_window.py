@@ -685,7 +685,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if not updates:
             return
         try:
-            self.repo.batch_update_instruments(ids, updates, reason=reason)
+            instrument_service.batch_update_instruments(self.repo, ids, updates, reason=reason)
             self.load_instruments()
             self.statusBar().showMessage(f"Updated {len(ids)} instrument(s)", 3000)
         except Exception as e:
@@ -709,8 +709,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         type_id, reason = dlg.get_result()
         try:
-            self.repo.batch_update_instruments(
-                ids, {"instrument_type_id": type_id}, reason=reason
+            instrument_service.batch_update_instruments(
+                self.repo, ids, {"instrument_type_id": type_id}, reason=reason
             )
             self.load_instruments()
             self.statusBar().showMessage(
@@ -796,7 +796,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if clicked == archive_btn:
             try:
-                self.repo.archive_instrument(inst_id, reason="Archived from delete dialog")
+                instrument_service.archive_instrument(self.repo, inst_id, reason="Archived from delete dialog")
                 self.load_instruments()
                 self.statusBar().showMessage(f"Archived instrument '{tag}'", 3000)
             except Exception as e:
@@ -820,7 +820,7 @@ class MainWindow(QtWidgets.QMainWindow):
         reason = reason.strip() or None
 
         try:
-            self.repo.delete_instrument(inst_id, reason=reason)
+            instrument_service.delete_instrument(self.repo, inst_id, reason=reason)
             self.load_instruments()
             self.statusBar().showMessage(f"Deleted instrument '{tag}'", 3000)
         except Exception as e:
@@ -857,7 +857,7 @@ class MainWindow(QtWidgets.QMainWindow):
         picked_date = dlg.get_date()
         try:
             # Update DB: last_cal_date = picked_date, next_due_date = picked_date + 1 year
-            self.repo.mark_calibrated_on(inst_id, picked_date)
+            instrument_service.mark_calibrated_on(self.repo, inst_id, picked_date)
             self.load_instruments()
             tag = inst.tag_number if inst else "instrument"
             self.statusBar().showMessage(f"{tag} marked as calibrated on {picked_date.isoformat()}", 3000)

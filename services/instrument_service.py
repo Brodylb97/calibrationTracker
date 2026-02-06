@@ -26,3 +26,33 @@ def update_instrument(repo: "CalibrationRepository", instrument_id: int, data: d
     if not tag:
         raise ValueError("ID is required")
     repo.update_instrument(instrument_id, data)
+
+
+def delete_instrument(repo: "CalibrationRepository", instrument_id: int, reason: str | None = None) -> None:
+    """Hard-delete instrument. For soft delete use archive_instrument."""
+    repo.delete_instrument(instrument_id, reason=reason)
+
+
+def archive_instrument(
+    repo: "CalibrationRepository",
+    instrument_id: int,
+    deleted_by: str | None = None,
+    reason: str | None = None,
+) -> None:
+    """Soft-delete (archive) instrument."""
+    repo.archive_instrument(instrument_id, deleted_by=deleted_by, reason=reason)
+
+
+def batch_update_instruments(
+    repo: "CalibrationRepository",
+    instrument_ids: list[int],
+    updates: dict,
+    reason: str | None = None,
+) -> int:
+    """Apply the same field updates to multiple instruments. Returns number updated."""
+    return repo.batch_update_instruments(instrument_ids, updates, reason=reason)
+
+
+def mark_calibrated_on(repo: "CalibrationRepository", instrument_id: int, cal_date: str) -> None:
+    """Update instrument's last_cal_date and next_due_date based on calibration."""
+    repo.mark_calibrated_on(instrument_id, cal_date)

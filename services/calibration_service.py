@@ -49,3 +49,20 @@ def update_calibration_record(
         record_id, cal_date, performed_by, result, notes, field_values,
         expected_updated_at=expected_updated_at,
     )
+
+
+def delete_calibration_record(
+    repo: "CalibrationRepository", record_id: int, reason: str | None = None
+) -> None:
+    """Hard-delete calibration record. For soft delete use archive_calibration_record."""
+    repo.delete_calibration_record(record_id, reason=reason)
+
+
+def archive_calibration_record(
+    repo: "CalibrationRepository",
+    record_id: int,
+    deleted_by: str | None = None,
+    reason: str | None = None,
+) -> None:
+    """Soft-delete (archive) calibration record."""
+    repo.archive_calibration_record(record_id, deleted_by=deleted_by, reason=reason)
