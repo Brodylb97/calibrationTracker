@@ -315,6 +315,110 @@ def replace_with_extracted(archive_path, app_dir, exclude_patterns=None):
                 print(f"Warning: could not write {dest}: {e}", file=sys.stderr)
 
 
+def _is_process_elevated() -> bool:
+    """True when this process has admin rights (e.g. updater elevated for Program Files)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _schedule_post_update_restart(stub_exe, app_exe, db_path=None, delay_seconds=5) -> bool:
+    """
+    Schedule RestartHelper in the interactive user session after a short delay.
+    Required when the updater is elevated: elevated processes cannot see mapped
+    network drives (e.g. Z:) used for --db.
+    """
+    if sys.platform != "win32":
+        return False
+    from datetime import datetime, timedelta
+
+    stub = str(Path(stub_exe).resolve())
+    exe = str(Path(app_exe).resolve())
+    db = str(db_path or "").strip()
+    tr = f'"{stub}" "{exe}"' + (f' "{db}"' if db else "")
+    run_at = datetime.now() + timedelta(seconds=delay_seconds)
+    args = [
+        "schtasks", "/create",
+        "/tn", "CalTrackerPostUpdate",
+        "/tr", tr,
+        "/sc", "once",
+        "/st", run_at.strftime("%H:%M"),
+        "/sd", run_at.strftime("%m/%d/%Y"),
+        "/it",
+        "/f",
+        "/Z",
+    ]
+    try:
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        subprocess.run(args, check=True, capture_output=True, creationflags=creationflags)
+        _log("Scheduled post-update restart at %s" % run_at.strftime("%H:%M:%S"))
+        return True
+    except Exception as e:
+        _log("Failed to schedule post-update restart: %s" % e)
+        return False
+
+
+def _launch_via_restart_helper(stub_exe, app_exe, db_path=None, delay_seconds=2) -> bool:
+    """Launch the main app through RestartHelper.exe (non-elevated updater path)."""
+    stub = Path(stub_exe)
+    exe = Path(app_exe)
+    if not stub.is_file() or not exe.is_file():
+        return False
+    time.sleep(delay_seconds)
+    try:
+        cmd = [str(stub), str(exe)]
+        if db_path:
+            cmd.append(str(db_path))
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        subprocess.Popen(cmd, cwd=str(exe.parent), creationflags=creationflags)
+        return True
+    except Exception as e:
+        _log("RestartHelper launch failed: %s" % e)
+        return False
+
+
+def _restart_application_after_update(app_dir, app_executable, restore_db_path=None):
+    """Restart the main application after files are replaced."""
+    app_exe = app_dir / app_executable
+    stub_exe = app_dir / "RestartHelper.exe"
+    if not app_exe.is_file():
+        main_py = app_dir / "main.py"
+        if main_py.is_file():
+            cmd = [sys.executable, str(main_py)]
+            if restore_db_path:
+                cmd.extend(["--db", str(restore_db_path)])
+            subprocess.Popen(cmd, cwd=str(app_dir), shell=False)
+        return
+
+    elevated = _is_process_elevated()
+    if stub_exe.is_file():
+        if elevated:
+            if _schedule_post_update_restart(stub_exe, app_exe, restore_db_path):
+                print("Application will restart shortly.")
+                return
+        elif _launch_via_restart_helper(stub_exe, app_exe, restore_db_path):
+            print("Restarting application...")
+            return
+
+    if elevated:
+        print(
+            "Update complete. Please start Calibration Tracker from the Start menu "
+            "(network database paths are not available to the elevated updater).",
+            file=sys.stderr,
+        )
+        return
+
+    print("Restarting application...")
+    cmd = [str(app_exe)]
+    if restore_db_path:
+        cmd.extend(["--db", str(restore_db_path)])
+    subprocess.Popen(cmd, cwd=str(app_dir), shell=False)
+
+
 def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=None, no_restart=False):
     """
     Perform full update flow: optional wait for PID, version check, download,
@@ -421,42 +525,7 @@ def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=
         print("Cleaning up temporary files...")
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-        if not no_restart:
-            app_exe = app_dir / app_executable
-            if app_exe.exists():
-                print("Restarting application...")
-                cmd = [str(app_exe)]
-                if restore_db_path:
-                    cmd.extend(["--db", str(restore_db_path)])
-                subprocess.Popen(cmd, cwd=str(app_dir), shell=False)
-            else:
-                # Run as Python if no exe (developer mode)
-                main_py = app_dir / "main.py"
-                if main_py.exists():
-                    cmd = [sys.executable, str(main_py)]
-                    if restore_db_path:
-                        cmd.extend(["--db", str(restore_db_path)])
-                    subprocess.Popen(cmd, cwd=str(app_dir), shell=False)
-        else:
-            # Run RestartHelper with exe + db path so it reopens on the same DB (avoids APPDATA mismatch when elevated).
-            stub_exe = app_dir / "RestartHelper.exe"
-            app_exe = app_dir / app_executable
-            if stub_exe.is_file() and app_exe.is_file():
-                print("Restarting application via RestartHelper...")
-                try:
-                    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-                    cmd = [str(stub_exe), str(app_exe)]
-                    if restore_db_path:
-                        cmd.append(str(restore_db_path))
-                    subprocess.Popen(
-                        cmd,
-                        cwd=str(app_dir),
-                        creationflags=creationflags,
-                    )
-                except Exception as e:
-                    print(f"Could not run RestartHelper: {e}", file=sys.stderr)
-            else:
-                print("RestartHelper.exe or main exe not found; please start the application manually.")
+        _restart_application_after_update(app_dir, app_executable, restore_db_path)
 
     finally:
         if temp_dir.exists():

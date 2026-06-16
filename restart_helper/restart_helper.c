@@ -74,6 +74,9 @@ int main(int argc, char** argv) {
 
     if (!exe_path[0]) return 1;
 
+    /* Brief pause so the updater can release file locks on the main exe. */
+    Sleep(2000);
+
     char work_dir[MAX_PATH];
     strncpy(work_dir, exe_path, sizeof work_dir - 1);
     work_dir[sizeof work_dir - 1] = '\0';
@@ -93,7 +96,7 @@ int main(int argc, char** argv) {
             exe_path,           /* lpApplicationName */
             cmdline,            /* lpCommandLine (must be writable; CreateProcess can mutate it) */
             NULL, NULL, FALSE,
-            CREATE_NO_WINDOW,   /* dwCreationFlags – no console flash */
+            0,                  /* dwCreationFlags – GUI app; do not use CREATE_NO_WINDOW */
             NULL,               /* lpEnvironment – NULL = inherit */
             work_dir[0] ? work_dir : NULL,  /* lpCurrentDirectory */
             &si, &pi)) {
