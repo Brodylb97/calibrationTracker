@@ -43,9 +43,14 @@ def _load_config(config_path=None):
 
 
 def _parse_version(version_string):
-    if not version_string or not isinstance(version_string, str):
+    try:
+        from update_app import normalize_release_version
+        normalized = normalize_release_version(version_string)
+    except ImportError:
+        normalized = (version_string or "").strip().splitlines()[0].strip()
+    if not normalized:
         return (0,)
-    parts = version_string.strip().split(".")
+    parts = normalized.split(".")
     result = []
     for p in parts:
         try:
@@ -125,8 +130,12 @@ def _get_latest_release_version_github(owner, repo, timeout_seconds=15):
     except Exception:
         return None
     tag = (data.get("tag_name") or "").strip()
-    if tag.startswith("v"):
-        tag = tag[1:]
+    try:
+        from update_app import normalize_release_version
+        tag = normalize_release_version(tag)
+    except ImportError:
+        if tag.startswith("v"):
+            tag = tag[1:]
     return tag if tag else None
 
 
@@ -144,14 +153,32 @@ def get_latest_version_from_remote(config=None, timeout_seconds=15):
         return None, "Update config not found"
     package_url = config.get("remote_package_url")
     gh = _parse_github_latest_download_url(package_url)
+    release_version = None
     if gh:
         owner, repo, _ = gh
-        version = _get_latest_release_version_github(owner, repo, timeout_seconds)
-        if version is not None:
-            return version, None
+        release_version = _get_latest_release_version_github(owner, repo, timeout_seconds)
     url = config.get("remote_version_url")
+    file_version = None
+    file_err = None
+    if url:
+        file_version, file_err = _fetch_version_from_url(url, timeout_seconds)
+    if release_version and file_version:
+        if _parse_version(file_version) > _parse_version(release_version):
+            return file_version, None
+        return release_version, None
+    if release_version:
+        return release_version, None
+    if file_version:
+        return file_version, None
+    if file_err:
+        return None, file_err
     if not url:
         return None, "remote_version_url not set"
+    return None, "Could not read remote version"
+
+
+def _fetch_version_from_url(url, timeout_seconds=15):
+    """Fetch VERSION text from remote_version_url with GitHub fallbacks. Returns (version, error)."""
 
     def _fetch(u, headers=None):
         h = headers or _VERSION_FETCH_HEADERS
@@ -174,8 +201,7 @@ def get_latest_version_from_remote(config=None, timeout_seconds=15):
         return e == "404" or (e and "404" in str(e))
 
     def _try_github_api(owner, repo, branch, path):
-        """Fetch file via GitHub Contents API; often works when raw URL 404s (e.g. casing/CDN).
-        Uses requests if available, else urllib so it works in the frozen exe without bundling requests."""
+        """Fetch file via GitHub Contents API; often works when raw URL 404s (e.g. casing/CDN)."""
         import base64
         import json as _json
         api_url = f"https://api.github.com/repos/{owner}/{repo}/contents/{path or 'VERSION'}?ref={branch}"
@@ -202,7 +228,6 @@ def get_latest_version_from_remote(config=None, timeout_seconds=15):
         return None
 
     def _try_github_fallbacks(owner, repo, branch, path):
-        # Prefer GitHub API first (avoids raw CDN 404s); then jsDelivr; then raw again
         t = _try_github_api(owner, repo, branch, path or "VERSION")
         if t is not None:
             return t
@@ -216,7 +241,6 @@ def get_latest_version_from_remote(config=None, timeout_seconds=15):
         return None
 
     try:
-        # When configured URL is raw GitHub, try API first (avoids cached raw CDN responses).
         owner = repo = branch = path = None
         if "raw.githubusercontent.com" in url:
             parts = url.replace("https://raw.githubusercontent.com/", "").split("/")
@@ -224,13 +248,11 @@ def get_latest_version_from_remote(config=None, timeout_seconds=15):
                 owner, repo, branch, path = parts[0], parts[1], parts[2], "/".join(parts[3:])
                 text = _try_github_api(owner, repo, branch, path or "VERSION")
                 if text is not None:
-                    return text, None
+                    return text.splitlines()[0].strip(), None
         text, err = _fetch(url)
         if not _is_404(err) and text is not None:
-            return text, None
-        # Fallbacks: derive owner/repo/branch/path from raw or jsDelivr URL if not already
+            return text.splitlines()[0].strip(), None
         if owner is None and "cdn.jsdelivr.net/gh/" in url:
-            # cdn.jsdelivr.net/gh/owner/repo@branch/path
             rest = url.split("cdn.jsdelivr.net/gh/", 1)[-1]
             if "@" in rest and "/" in rest:
                 mid = rest.split("@", 1)
@@ -243,7 +265,7 @@ def get_latest_version_from_remote(config=None, timeout_seconds=15):
         if owner and repo and branch is not None:
             text = _try_github_fallbacks(owner, repo, branch, path or "VERSION")
             if text is not None:
-                return text, None
+                return text.splitlines()[0].strip(), None
         return None, (
             "Update server returned 404. Ensure VERSION is in the repo root. Tried: " + url
             if _is_404(err) else (err or "Unknown error")

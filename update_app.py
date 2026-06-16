@@ -9,6 +9,7 @@ main application has exited (e.g. launched with --wait-pid <pid>).
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -85,11 +86,28 @@ def load_config(config_path=None):
     return data
 
 
+_SEMVER_RE = re.compile(r"(\d+\.\d+\.\d+)")
+
+
+def normalize_release_version(version_string: str | None) -> str:
+    """Extract major.minor.patch from tags like v3.3.2, Update3.3.2, or plain 3.3.2."""
+    if not version_string or not isinstance(version_string, str):
+        return ""
+    text = version_string.strip().splitlines()[0].strip()
+    match = _SEMVER_RE.search(text)
+    if match:
+        return match.group(1)
+    if text.lower().startswith("v"):
+        text = text[1:].strip()
+    return text
+
+
 def parse_version(version_string):
     """Parse a version string into a comparable tuple (e.g. '1.2.3' -> (1, 2, 3))."""
-    if not version_string or not isinstance(version_string, str):
+    normalized = normalize_release_version(version_string)
+    if not normalized:
         return (0,)
-    parts = version_string.strip().split(".")
+    parts = normalized.strip().split(".")
     result = []
     for p in parts:
         try:
@@ -185,9 +203,7 @@ def resolve_github_latest_release(owner, repo, asset_name, timeout_seconds=15):
                 data = json.loads(r.read().decode("utf-8", errors="replace"))
         else:
             return None, None
-        tag = (data.get("tag_name") or "").strip()
-        if tag.startswith("v"):
-            tag = tag[1:]
+        tag = normalize_release_version(data.get("tag_name") or "")
         if not tag:
             return None, None
         for asset in data.get("assets") or []:
