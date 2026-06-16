@@ -13,7 +13,9 @@ import io
 import logging
 import math
 import re
+import shutil
 from collections import OrderedDict
+from datetime import date, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -367,6 +369,66 @@ def _format_value_for_pdf(v: dict, values_by_name: dict | None = None) -> str:
         except Exception:
             return "Yes" if reading_bool else "No"
     return "Yes" if reading_bool else "No"
+
+
+def is_external_calibration_template(template_name: str | None) -> bool:
+    """True when the record uses an external (file-only) calibration template."""
+    name = (template_name or "").strip()
+    return name in ("External calibration file", "External calibration (file only)")
+
+
+def parse_calibration_record_date(value: str | None) -> date | None:
+    """Parse YYYY-MM-DD or timestamp prefix to date."""
+    if not value:
+        return None
+    text = str(value).strip()[:10]
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def calibration_record_display_date(repo, rec: dict) -> str:
+    """
+    Date shown in calibration history:
+    - External/file calibrations: attachment upload date
+    - In-house template calibrations: cal_date from the record
+    """
+    if is_external_calibration_template(rec.get("template_name")):
+        atts = repo.list_attachments_for_record(rec["id"])
+        if atts:
+            uploaded = (atts[0].get("uploaded_at") or "").strip()
+            if uploaded:
+                return uploaded[:10]
+    return (rec.get("cal_date") or "").strip()
+
+
+def get_primary_attachment_for_record(repo, rec_id: int) -> dict | None:
+    """Return the newest attachment linked to a calibration record, if any."""
+    atts = repo.list_attachments_for_record(rec_id)
+    if not atts:
+        return None
+    for att in atts:
+        path = att.get("file_path")
+        if path and Path(path).is_file():
+            return att
+    return None
+
+
+def export_calibration_record(repo, rec_id: int, output_path: str | Path) -> str:
+    """
+    Export a calibration record. Copies the attached file when one exists;
+    otherwise generates a PDF report. Returns 'attachment' or 'pdf'.
+    """
+    output_path = Path(output_path)
+    att = get_primary_attachment_for_record(repo, rec_id)
+    if att:
+        src = Path(att["file_path"])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, output_path)
+        return "attachment"
+    export_calibration_to_pdf(repo, rec_id, output_path)
+    return "pdf"
 
 
 def export_calibration_to_pdf(repo, rec_id: int, output_path: str | Path) -> None:
@@ -998,6 +1060,7 @@ def export_all_calibrations_to_directory(
     records = repo.list_all_calibration_records()
     total = len(records)
     success_count = 0
+    attachment_count = 0
     error_count = 0
     errors = []
     cancelled = False
@@ -1009,17 +1072,24 @@ def export_all_calibrations_to_directory(
         rec_id = rec["id"]
         instrument_type_name = rec.get("instrument_type_name") or "Unknown"
         tag = rec.get("tag_number") or "unknown"
-        cal_date = rec.get("cal_date") or ""
+        cal_date = calibration_record_display_date(repo, rec) or rec.get("cal_date") or ""
         safe_type = _safe_filename(instrument_type_name)
         safe_tag = _safe_filename(tag)
         safe_date = _safe_filename(cal_date) if cal_date else "nodate"
         subdir = base_dir / safe_type
         subdir.mkdir(parents=True, exist_ok=True)
-        filename = f"{safe_tag}_{safe_date}.pdf"
+        att = get_primary_attachment_for_record(repo, rec_id)
+        if att:
+            ext = Path(att.get("filename") or att.get("file_path") or "").suffix or ".pdf"
+            filename = f"{safe_tag}_{safe_date}{ext}"
+        else:
+            filename = f"{safe_tag}_{safe_date}.pdf"
         out_path = subdir / filename
         try:
-            export_calibration_to_pdf(repo, rec_id, out_path)
+            kind = export_calibration_record(repo, rec_id, out_path)
             success_count += 1
+            if kind == "attachment":
+                attachment_count += 1
         except Exception as e:
             error_count += 1
             errors.append(f"Record {rec_id} ({tag} {cal_date}): {e}")
@@ -1028,7 +1098,7 @@ def export_all_calibrations_to_directory(
 
     return {
         "success_count": success_count,
-        "attachment_count": 0,
+        "attachment_count": attachment_count,
         "error_count": error_count,
         "errors": errors,
         "cancelled": cancelled,

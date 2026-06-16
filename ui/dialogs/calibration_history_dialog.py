@@ -1,11 +1,19 @@
 # ui/dialogs/calibration_history_dialog.py - View/edit calibration history for an instrument
 
+from datetime import date
+
 from PyQt5 import QtWidgets, QtCore, QtGui
 
 from database import CalibrationRepository
-from services import calibration_service, template_service
+from services import calibration_service, template_service, attachment_service
 from ui.help_content import get_help_content, HelpDialog
 from ui.dialogs.calibration_form_dialog import CalibrationFormDialog
+from pdf_export import (
+    calibration_record_display_date,
+    export_calibration_record,
+    get_primary_attachment_for_record,
+    parse_calibration_record_date,
+)
 
 class CalibrationHistoryDialog(QtWidgets.QDialog):
     def __init__(self, repo: CalibrationRepository, instrument_id: int, parent=None):
@@ -51,6 +59,7 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         self.table.setHorizontalHeaderLabels(
             ["Date", "Template", "Performed by", "Result", "State"]
         )
+        self.table.setSortingEnabled(False)
         
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
@@ -277,14 +286,25 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         )
         return self.repo.get_template(tpl_id)
 
+    def _sort_records_by_display_date(self, recs: list) -> list:
+        """Newest first by display date (attachment date or in-house cal date)."""
+        def sort_key(r):
+            display = calibration_record_display_date(self.repo, r)
+            parsed = parse_calibration_record_date(display)
+            return (parsed or date.min, r.get("id") or 0)
+
+        return sorted(recs, key=sort_key, reverse=True)
+
     def _load_records(self):
         include_archived = getattr(self, "show_archived_check", None) and self.show_archived_check.isChecked()
         recs = self.repo.list_calibration_records_for_instrument(
             self.instrument_id, include_archived=include_archived
         )
+        recs = self._sort_records_by_display_date(recs)
         self.table.setRowCount(len(recs))
         for row, r in enumerate(recs):
-            item_date = QtWidgets.QTableWidgetItem(r.get("cal_date", ""))
+            display_date = calibration_record_display_date(self.repo, r)
+            item_date = QtWidgets.QTableWidgetItem(display_date)
             tpl_name = r.get("template_name", "")
             tpl_ver = r.get("template_version")
             if tpl_ver is not None:
@@ -1150,33 +1170,41 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
                 "Please select a calibration record to export.",
             )
             return
-        
-        # Get default filename
+
         rec = self.repo.get_calibration_record_with_template(rec_id)
         inst = self.repo.get_instrument(rec["instrument_id"]) if rec else None
         tag = inst.get("tag_number", "calibration") if inst else "calibration"
-        cal_date = rec.get("cal_date", "") if rec else ""
-        default_name = f"{tag}_{cal_date}.pdf" if cal_date else f"{tag}.pdf"
-        
+        display_date = calibration_record_display_date(self.repo, rec) if rec else ""
+        att = get_primary_attachment_for_record(self.repo, rec_id)
+
+        if att:
+            default_name = att.get("filename") or f"{tag}_{display_date}"
+            file_filter = "All files (*.*)"
+        else:
+            default_name = f"{tag}_{display_date}.pdf" if display_date else f"{tag}.pdf"
+            file_filter = "PDF files (*.pdf);;All files (*.*)"
+
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
-            "Export calibration to PDF",
+            "Export calibration",
             default_name,
-            "PDF files (*.pdf);;All files (*)",
+            file_filter,
         )
         if not path:
             return
-        
+
         try:
-            from pdf_export import export_calibration_to_pdf
-            export_calibration_to_pdf(self.repo, rec_id, path)
+            kind = export_calibration_record(self.repo, rec_id, path)
+            if kind == "attachment":
+                msg = f"Attached calibration file exported to:\n{path}"
+            else:
+                msg = f"Calibration record exported to:\n{path}"
             QtWidgets.QMessageBox.information(
                 self,
                 "Export complete",
-                f"Calibration record exported to:\n{path}",
+                msg,
             )
         except PermissionError as e:
-            # Handle permission errors with a user-friendly message
             QtWidgets.QMessageBox.warning(
                 self,
                 "Export failed - Permission denied",
@@ -1185,10 +1213,10 @@ class CalibrationHistoryDialog(QtWidgets.QDialog):
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
-            print(f"PDF Export Error:\n{error_details}")  # Print to console for debugging
+            print(f"Export Error:\n{error_details}")
             QtWidgets.QMessageBox.critical(
                 self,
                 "Export failed",
-                f"Error exporting to PDF:\n{str(e)}\n\nSee console for details.",
+                f"Error exporting calibration:\n{str(e)}\n\nSee console for details.",
             )
        
