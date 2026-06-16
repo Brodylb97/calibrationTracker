@@ -48,6 +48,26 @@ def _safe_filename(s: str) -> str:
     return s.strip() or "unknown"
 
 
+def _year_from_cal_date(cal_date: str | None) -> str:
+    """Extract a four-digit year from a calibration date string."""
+    if not cal_date:
+        return "Unknown"
+    parsed = parse_calibration_record_date(cal_date)
+    if parsed:
+        return str(parsed.year)
+    text = str(cal_date).strip()[:10]
+    if len(text) >= 4 and text[:4].isdigit():
+        return text[:4]
+    return "Unknown"
+
+
+def _export_path_for_record(base_dir: Path, instrument_type_name: str, cal_date: str, filename: str) -> Path:
+    """Build export path: base_dir / Type / Year / filename."""
+    safe_type = _safe_filename(instrument_type_name or "Unknown")
+    safe_year = _safe_filename(_year_from_cal_date(cal_date))
+    return base_dir / safe_type / safe_year / filename
+
+
 def _logo_path() -> Path:
     """Path to AHI_logo.png (centered at top)."""
     return get_base_dir() / "AHI_logo.png"
@@ -1047,13 +1067,12 @@ def export_all_calibrations_to_directory(
     cancelled_check=None,
 ) -> dict:
     """
-    Export all calibration records to PDF files in the given directory.
-    Organizes files by instrument type: base_dir / instrument_type_name / tag_caldate.pdf
-    Returns dict with: success_count, attachment_count, error_count, errors (list of strings),
-    cancelled (bool).
-
-    Optional: progress_callback(current, total) called after each record.
-    Optional: cancelled_check() - if returns True, export stops and returns partial result.
+    Export all calibration records to files in the given directory.
+    Organizes files by instrument type then year:
+      base_dir / instrument_type_name / year / tag_caldate.pdf
+    Skips files that already exist at the target path.
+    Returns dict with: success_count, attachment_count, error_count, skipped_count,
+    errors, skipped, cancelled.
     """
     base_dir = Path(base_dir)
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -1062,6 +1081,8 @@ def export_all_calibrations_to_directory(
     success_count = 0
     attachment_count = 0
     error_count = 0
+    skipped_count = 0
+    skipped = []
     errors = []
     cancelled = False
 
@@ -1073,18 +1094,25 @@ def export_all_calibrations_to_directory(
         instrument_type_name = rec.get("instrument_type_name") or "Unknown"
         tag = rec.get("tag_number") or "unknown"
         cal_date = calibration_record_display_date(repo, rec) or rec.get("cal_date") or ""
-        safe_type = _safe_filename(instrument_type_name)
         safe_tag = _safe_filename(tag)
         safe_date = _safe_filename(cal_date) if cal_date else "nodate"
-        subdir = base_dir / safe_type
-        subdir.mkdir(parents=True, exist_ok=True)
         att = get_primary_attachment_for_record(repo, rec_id)
         if att:
             ext = Path(att.get("filename") or att.get("file_path") or "").suffix or ".pdf"
             filename = f"{safe_tag}_{safe_date}{ext}"
         else:
             filename = f"{safe_tag}_{safe_date}.pdf"
-        out_path = subdir / filename
+        out_path = _export_path_for_record(base_dir, instrument_type_name, cal_date, filename)
+        if out_path.exists():
+            skipped_count += 1
+            try:
+                skipped.append(str(out_path.relative_to(base_dir)))
+            except ValueError:
+                skipped.append(str(out_path))
+            if progress_callback:
+                progress_callback(i + 1, total)
+            continue
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             kind = export_calibration_record(repo, rec_id, out_path)
             success_count += 1
@@ -1100,6 +1128,8 @@ def export_all_calibrations_to_directory(
         "success_count": success_count,
         "attachment_count": attachment_count,
         "error_count": error_count,
+        "skipped_count": skipped_count,
+        "skipped": skipped,
         "errors": errors,
         "cancelled": cancelled,
     }

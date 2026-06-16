@@ -74,6 +74,13 @@ def get_help_content(dialog_type: str) -> tuple[str, str]:
                         <li>Configure LAN broadcast settings for network reminders</li>
                     </ul>
                 </li>
+                <li><b>Backup</b>: Create manual database backups</li>
+                <li><b>Export</b>: Set the default folder for bulk calibration exports
+                    <ul>
+                        <li>Exports are organized as <b>Type / Year / files</b></li>
+                        <li>Existing type and year folders are reused; files with the same name are skipped</li>
+                    </ul>
+                </li>
             </ul>
             
             <h4>Tips:</h4>

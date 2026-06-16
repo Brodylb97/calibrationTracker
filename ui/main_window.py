@@ -1150,45 +1150,66 @@ class MainWindow(QtWidgets.QMainWindow):
                 str(e),
             )
 
-    def _on_export_preset(self, preset_name: str):
-        """Export all calibrations to PDF in a preset subfolder (e.g. Internal_Review_2025-01-29)."""
-        base_dir = QtWidgets.QFileDialog.getExistingDirectory(
+    def _configured_export_directory(self) -> Path | None:
+        """Return the export directory from settings, or None if not set."""
+        path = (self.repo.get_setting("export_directory", "") or "").strip()
+        return Path(path) if path else None
+
+    def _resolve_export_base_dir(self, prompt: str) -> Path | None:
+        """Use configured export directory when set; otherwise prompt the user."""
+        configured = self._configured_export_directory()
+        if configured:
+            try:
+                configured.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Export directory",
+                    f"Could not create export directory:\n{configured}\n\n{e}",
+                )
+                configured = None
+            else:
+                return configured
+        picked = QtWidgets.QFileDialog.getExistingDirectory(
             self,
-            f"Select directory for '{preset_name}' export",
-            "",
+            prompt,
+            str(configured) if configured else "",
             QtWidgets.QFileDialog.ShowDirsOnly | QtWidgets.QFileDialog.DontResolveSymlinks,
         )
+        return Path(picked) if picked else None
+
+    def _on_export_preset(self, preset_name: str):
+        """Export all calibrations to PDF in a preset subfolder (e.g. Internal_Review_2025-01-29)."""
+        base_dir = self._resolve_export_base_dir(f"Select directory for '{preset_name}' export")
         if not base_dir:
             return
         subfolder = f"{preset_name}_{date.today().isoformat()}"
-        import os
-        target_dir = os.path.join(base_dir, subfolder)
+        target_dir = base_dir / subfolder
         reply = QtWidgets.QMessageBox.question(
             self,
             "Export preset",
-            f"Export all calibration records to PDF in:\n{target_dir}\n\nContinue?",
+            f"Export all calibration records to:\n{target_dir}\n\n"
+            f"Files are organized as Type \\ Year \\ filename.\n"
+            f"Existing files with the same name are skipped.\n\n"
+            f"Continue?",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
         )
         if reply != QtWidgets.QMessageBox.Yes:
             return
         self._run_pdf_export_async(target_dir)
-    
+
     def on_export_all_calibrations(self):
-        """Export all calibration records to PDF files organized by instrument type."""
-        base_dir = QtWidgets.QFileDialog.getExistingDirectory(
-            self,
-            "Select directory for calibration exports",
-            "",
-            QtWidgets.QFileDialog.ShowDirsOnly | QtWidgets.QFileDialog.DontResolveSymlinks,
-        )
+        """Export all calibration records organized by instrument type and year."""
+        base_dir = self._resolve_export_base_dir("Select directory for calibration exports")
         if not base_dir:
             return
         reply = QtWidgets.QMessageBox.question(
             self,
             "Export all calibrations",
-            f"This will export all calibration records to PDF files in:\n{base_dir}\n\n"
-            f"Files will be organized by instrument type.\n\n"
+            f"This will export all calibration records to:\n{base_dir}\n\n"
+            f"Files are organized as Type \\ Year \\ filename.\n"
+            f"Existing files with the same name are skipped.\n\n"
             f"Continue?",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
@@ -1233,10 +1254,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._export_progress = None
         self._export_worker = None
         cancelled = result.get("cancelled", False)
+        skipped = result.get("skipped") or []
+        skipped_count = result.get("skipped_count", len(skipped))
         if cancelled:
             msg = (
                 f"Export cancelled.\n\n"
                 f"Partially exported: {result['success_count']} calibration(s)\n"
+                f"Skipped (already exist): {skipped_count}\n"
                 f"Errors: {result['error_count']}"
             )
         else:
@@ -1244,6 +1268,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 f"Export complete!\n\n"
                 f"Successfully exported: {result['success_count']} calibration(s)\n"
                 f"Attachments exported: {result.get('attachment_count', 0)}\n"
+                f"Skipped (already exist): {skipped_count}\n"
                 f"Errors: {result['error_count']}"
             )
         if result.get("errors"):
@@ -1251,12 +1276,18 @@ class MainWindow(QtWidgets.QMainWindow):
             if len(result["errors"]) > 10:
                 error_details += f"\n... and {len(result['errors']) - 10} more errors"
             msg += f"\n\nErrors:\n{error_details}"
+        if skipped:
+            skip_details = "\n".join(skipped[:30])
+            if len(skipped) > 30:
+                skip_details += f"\n... and {len(skipped) - 30} more"
+            msg += f"\n\nSkipped files:\n{skip_details}"
+        title = "Export cancelled" if cancelled else "Export complete"
         if result["error_count"] > 0:
-            QtWidgets.QMessageBox.warning(self, "Export complete with errors", msg)
+            QtWidgets.QMessageBox.warning(self, f"{title} with errors", msg)
+        elif skipped:
+            QtWidgets.QMessageBox.information(self, title, msg)
         else:
-            QtWidgets.QMessageBox.information(
-                self, "Export cancelled" if cancelled else "Export complete", msg
-            )
+            QtWidgets.QMessageBox.information(self, title, msg)
 
     def _on_export_error(self, err_msg: str):
         if self._export_progress:

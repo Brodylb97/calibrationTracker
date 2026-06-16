@@ -91,6 +91,27 @@ class SettingsDialog(QtWidgets.QDialog):
         backup_layout.addStretch()
         tabs.addTab(backup_widget, "Backup")
 
+        # Export tab
+        export_widget = QtWidgets.QWidget()
+        export_form = QtWidgets.QFormLayout(export_widget)
+        self.export_dir_edit = QtWidgets.QLineEdit(
+            self.repo.get_setting("export_directory", "") or ""
+        )
+        self.export_dir_edit.setPlaceholderText("Folder for bulk calibration exports (optional)")
+        browse_export_btn = QtWidgets.QPushButton("Browse...")
+        browse_export_btn.clicked.connect(self._browse_export_directory)
+        export_dir_row = QtWidgets.QHBoxLayout()
+        export_dir_row.addWidget(self.export_dir_edit)
+        export_dir_row.addWidget(browse_export_btn)
+        export_form.addRow("Export directory", export_dir_row)
+        export_hint = QtWidgets.QLabel(
+            "Bulk exports are saved as Type \\ Year \\ files. "
+            "Existing files with the same name in the same year folder are skipped."
+        )
+        export_hint.setWordWrap(True)
+        export_form.addRow(export_hint)
+        tabs.addTab(export_widget, "Export")
+
         self.btn_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel | QtWidgets.QDialogButtonBox.Help
         )
@@ -106,6 +127,17 @@ class SettingsDialog(QtWidgets.QDialog):
         dlg.open()
         dlg.raise_()
         dlg.activateWindow()
+
+    def _browse_export_directory(self):
+        start = self.export_dir_edit.text().strip()
+        path = QtWidgets.QFileDialog.getExistingDirectory(
+            self,
+            "Select export directory",
+            start,
+            QtWidgets.QFileDialog.ShowDirsOnly | QtWidgets.QFileDialog.DontResolveSymlinks,
+        )
+        if path:
+            self.export_dir_edit.setText(path)
 
     def _on_backup_now(self):
         from database import get_effective_db_path
@@ -134,6 +166,9 @@ class SettingsDialog(QtWidgets.QDialog):
             qend = self.quiet_end_edit.time().toString("HH:mm")
             settings_service.set_setting(self.repo, "quiet_start", qstart)
             settings_service.set_setting(self.repo, "quiet_end", qend)
+            settings_service.set_setting(
+                self.repo, "export_directory", self.export_dir_edit.text().strip()
+            )
             try:
                 from file_utils import atomic_write_text
                 base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
