@@ -101,6 +101,18 @@ def build_executable() -> None:
         print("  RestartHelper.exe copied to dist\\")
     else:
         print("  WARNING: restart_helper\\RestartHelper.exe not found.")
+    updater_args = [
+        sys.executable, "-m", "PyInstaller",
+        "--name=CalibrationTrackerUpdater",
+        "--onefile", "--noconsole",
+        "--hidden-import=requests",
+        "update_app.py",
+    ]
+    try:
+        subprocess.run(updater_args, cwd=PROJECT_ROOT, check=True)
+        print("  CalibrationTrackerUpdater.exe built.")
+    except subprocess.CalledProcessError:
+        print("  WARNING: CalibrationTrackerUpdater.exe build failed.")
 
 
 def find_iscc() -> Path | None:

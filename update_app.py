@@ -326,6 +326,28 @@ def _is_process_elevated() -> bool:
         return False
 
 
+def _interactive_user_for_task():
+    """Return DOMAIN\\User for the logged-on interactive user, or None."""
+    if sys.platform != "win32":
+        return None
+    try:
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        r = subprocess.run(
+            [
+                "powershell", "-NoProfile", "-Command",
+                "(Get-CimInstance -ClassName Win32_ComputerSystem).UserName",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            creationflags=flags,
+        )
+        user = (r.stdout or "").strip()
+        return user if user else None
+    except Exception:
+        return None
+
+
 def _schedule_post_update_restart(stub_exe, app_exe, db_path=None, delay_seconds=5) -> bool:
     """
     Schedule RestartHelper in the interactive user session after a short delay.
@@ -341,6 +363,9 @@ def _schedule_post_update_restart(stub_exe, app_exe, db_path=None, delay_seconds
     db = str(db_path or "").strip()
     tr = f'"{stub}" "{exe}"' + (f' "{db}"' if db else "")
     run_at = datetime.now() + timedelta(seconds=delay_seconds)
+    min_at = datetime.now() + timedelta(minutes=1)
+    if run_at < min_at:
+        run_at = min_at
     args = [
         "schtasks", "/create",
         "/tn", "CalTrackerPostUpdate",
@@ -352,14 +377,24 @@ def _schedule_post_update_restart(stub_exe, app_exe, db_path=None, delay_seconds
         "/f",
         "/Z",
     ]
-    try:
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-        subprocess.run(args, check=True, capture_output=True, creationflags=creationflags)
-        _log("Scheduled post-update restart at %s" % run_at.strftime("%H:%M:%S"))
-        return True
-    except Exception as e:
-        _log("Failed to schedule post-update restart: %s" % e)
-        return False
+    user = _interactive_user_for_task()
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    attempts = []
+    base_args = args[:]
+    if user:
+        attempts.append(base_args + ["/ru", user])
+    attempts.append(base_args)
+    for task_args in attempts:
+        try:
+            subprocess.run(task_args, check=True, capture_output=True, creationflags=creationflags)
+            _log("Scheduled post-update restart at %s" % run_at.strftime("%H:%M:%S"))
+            return True
+        except Exception as e:
+            err = ""
+            if isinstance(e, subprocess.CalledProcessError) and e.stderr:
+                err = e.stderr.decode("utf-8", errors="replace")
+            _log("Failed to schedule post-update restart: %s %s" % (e, err))
+    return False
 
 
 def _launch_via_restart_helper(stub_exe, app_exe, db_path=None, delay_seconds=2) -> bool:
@@ -373,8 +408,7 @@ def _launch_via_restart_helper(stub_exe, app_exe, db_path=None, delay_seconds=2)
         cmd = [str(stub), str(exe)]
         if db_path:
             cmd.append(str(db_path))
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-        subprocess.Popen(cmd, cwd=str(exe.parent), creationflags=creationflags)
+        subprocess.Popen(cmd, cwd=str(exe.parent))
         return True
     except Exception as e:
         _log("RestartHelper launch failed: %s" % e)
@@ -397,7 +431,7 @@ def _restart_application_after_update(app_dir, app_executable, restore_db_path=N
     elevated = _is_process_elevated()
     if stub_exe.is_file():
         if elevated:
-            if _schedule_post_update_restart(stub_exe, app_exe, restore_db_path):
+            if _schedule_post_update_restart(stub_exe, app_exe, restore_db_path, delay_seconds=15):
                 print("Application will restart shortly.")
                 return
         elif _launch_via_restart_helper(stub_exe, app_exe, restore_db_path):
@@ -525,6 +559,8 @@ def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=
         print("Cleaning up temporary files...")
         shutil.rmtree(temp_dir, ignore_errors=True)
 
+        # Always attempt restart; when no_restart was set, a backup task may exist but
+        # we reschedule here with a short delay so timing matches update completion.
         _restart_application_after_update(app_dir, app_executable, restore_db_path)
 
     finally:
