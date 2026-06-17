@@ -568,6 +568,36 @@ def run_update(config, wait_pid=None, skip_version_check=False, restore_db_path=
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def _bootstrap_log(msg):
+    """Write to updater log before argparse (elevated child may fail early)."""
+    try:
+        log_path = Path(tempfile.gettempdir()) / "CalibrationTracker_updater.log"
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+    except Exception:
+        pass
+
+
+def _build_elevated_params(args) -> str:
+    """Build ShellExecuteW params for elevated relaunch."""
+    if getattr(sys, "frozen", False):
+        # Frozen updater exe: pass flags only (not __file__ from the temp extract dir).
+        parts = ["--elevated"]
+    else:
+        parts = [os.path.normpath(os.path.abspath(__file__)), "--elevated"]
+    if getattr(args, "config", None):
+        parts.extend(["--config", str(args.config)])
+    if args.wait_pid is not None:
+        parts.extend(["--wait-pid", str(args.wait_pid)])
+    if args.skip_version_check:
+        parts.append("--skip-version-check")
+    if getattr(args, "restore_db", None):
+        parts.extend(["--restore-db", str(args.restore_db)])
+    if getattr(args, "no_restart", False):
+        parts.append("--no-restart")
+    return " ".join(f'"{p}"' if " " in str(p) else str(p) for p in parts)
+
+
 def _try_relaunch_elevated(args):
     """On Windows, if app is in Program Files, re-launch this script as Administrator. Return True if we relaunched."""
     if sys.platform != "win32":
@@ -579,31 +609,23 @@ def _try_relaunch_elevated(args):
         app_dir_str = str(app_dir).lower()
         if "program files" not in app_dir_str and "programfiles" not in app_dir_str.replace(" ", ""):
             return False
-        # Need elevation to write to Program Files; re-launch with "runas"
-        script_path = os.path.normpath(os.path.abspath(__file__))
-        params_list = [script_path, "--config", str(args.config), "--elevated"]
-        if args.wait_pid is not None:
-            params_list.extend(["--wait-pid", str(args.wait_pid)])
-        if args.skip_version_check:
-            params_list.append("--skip-version-check")
-        if getattr(args, "restore_db", None):
-            params_list.extend(["--restore-db", str(args.restore_db)])
-        if getattr(args, "no_restart", False):
-            params_list.append("--no-restart")
-        params = " ".join('"{}"'.format(p) if " " in str(p) else str(p) for p in params_list)
+        params = _build_elevated_params(args)
         exe = sys.executable if sys.executable else "python"
+        _bootstrap_log("Elevating updater: exe=%r params=%r" % (exe, params))
         ret = ctypes.windll.shell32.ShellExecuteW(
             None, "runas", exe, params, str(app_dir), 1
         )
         if ret > 32:
             return True
-    except Exception:
-        pass
+        _bootstrap_log("ShellExecuteW elevation failed (code=%s)" % ret)
+    except Exception as e:
+        _bootstrap_log("Elevated relaunch exception: %s" % e)
     return False
 
 
 def main():
     global _UPDATER_LOG
+    _bootstrap_log("argv=%r frozen=%s" % (sys.argv, getattr(sys, "frozen", False)))
     parser = argparse.ArgumentParser(description="Calibration Tracker – automated update script")
     parser.add_argument("--config", type=Path, help="Path to update_config.json")
     parser.add_argument("--wait-pid", type=int, metavar="PID", help="Wait for this process ID to exit before updating")
