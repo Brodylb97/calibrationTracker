@@ -376,64 +376,21 @@ def _write_restart_params(exe_path, db_path):
         return False
 
 
-def _create_restart_task_stub(stub_exe_path, app_exe_path=None, db_path=None, delay_seconds=120):
+def _create_restart_task_stub(stub_exe_path, app_exe_path=None, db_path=None, delay_seconds=300):
     """
-    On Windows, create a one-time scheduled task that runs RestartHelper.exe
-    in the interactive user session. Called from the main app (non-elevated)
-    before starting the elevated updater with --no-restart.
+    On Windows, schedule RestartHelper.exe in the user session before the updater.
+    RestartHelper reads exe/db paths from restart_params.txt (no args on the task).
     """
-    if sys.platform != "win32":
-        return False
+    from restart_schedule import schedule_restart_helper
+
     stub_exe_path = Path(stub_exe_path).resolve()
     if not stub_exe_path.is_file():
         return False
-    stub_str = str(stub_exe_path)
-    app_dir = str(stub_exe_path.parent)
-
-    if app_exe_path:
-        app_str = str(Path(app_exe_path).resolve())
-        db_str = str(db_path or "").strip()
-        tr = f'"{stub_str}" "{app_str}"'
-        if db_str:
-            tr += f' "{db_str}"'
-    else:
-        tr = f'"{stub_str}"'
-
-    run_at = datetime.now() + timedelta(seconds=delay_seconds)
-    # schtasks /ST is minute-precision; keep at least two minutes ahead
-    min_at = datetime.now() + timedelta(minutes=2)
-    if run_at < min_at:
-        run_at = min_at
-
-    args = [
-        "schtasks", "/create",
-        "/tn", "CalTrackerPostUpdate",
-        "/tr", tr,
-        "/sc", "once",
-        "/st", run_at.strftime("%H:%M"),
-        "/sd", run_at.strftime("%m/%d/%Y"),
-        "/it",
-        "/f",
-        "/Z",
-    ]
-    try:
-        subprocess.run(
-            args,
-            check=True,
-            capture_output=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
-            cwd=app_dir,
-        )
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
+    ok = schedule_restart_helper(stub_exe_path, delay_seconds=delay_seconds)
+    if not ok:
         import logging
-        detail = ""
-        if isinstance(e, subprocess.CalledProcessError) and e.stderr:
-            detail = e.stderr.decode("utf-8", errors="replace")
-        logging.getLogger(__name__).warning(
-            "Failed to schedule post-update restart task: %s %s", e, detail
-        )
-        return False
+        logging.getLogger(__name__).warning("Failed to schedule backup post-update restart task")
+    return ok
 
 
 def trigger_update_and_exit(restore_db_path=None):

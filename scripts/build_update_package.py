@@ -23,6 +23,7 @@ FILES = [
     ("dist/RestartHelper.exe", "RestartHelper.exe"),
     ("update_app.py", "update_app.py"),
     ("update_checker.py", "update_checker.py"),
+    ("restart_schedule.py", "restart_schedule.py"),
     ("update_config.example.json", "update_config.example.json"),
     ("VERSION", "VERSION"),
     ("AHI_logo.png", "AHI_logo.png"),

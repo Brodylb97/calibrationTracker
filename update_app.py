@@ -348,53 +348,21 @@ def _interactive_user_for_task():
         return None
 
 
-def _schedule_post_update_restart(stub_exe, app_exe, db_path=None, delay_seconds=5) -> bool:
+def _schedule_post_update_restart(stub_exe, app_exe, db_path=None, delay_seconds=15) -> bool:
     """
     Schedule RestartHelper in the interactive user session after a short delay.
     Required when the updater is elevated: elevated processes cannot see mapped
-    network drives (e.g. Z:) used for --db.
+    network drives (e.g. Z:) used for --db. Paths come from restart_params.txt.
     """
-    if sys.platform != "win32":
-        return False
-    from datetime import datetime, timedelta
+    from restart_schedule import schedule_restart_helper
 
-    stub = str(Path(stub_exe).resolve())
-    exe = str(Path(app_exe).resolve())
-    db = str(db_path or "").strip()
-    tr = f'"{stub}" "{exe}"' + (f' "{db}"' if db else "")
-    run_at = datetime.now() + timedelta(seconds=delay_seconds)
-    min_at = datetime.now() + timedelta(minutes=1)
-    if run_at < min_at:
-        run_at = min_at
-    args = [
-        "schtasks", "/create",
-        "/tn", "CalTrackerPostUpdate",
-        "/tr", tr,
-        "/sc", "once",
-        "/st", run_at.strftime("%H:%M"),
-        "/sd", run_at.strftime("%m/%d/%Y"),
-        "/it",
-        "/f",
-        "/Z",
-    ]
     user = _interactive_user_for_task()
-    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-    attempts = []
-    base_args = args[:]
-    if user:
-        attempts.append(base_args + ["/ru", user])
-    attempts.append(base_args)
-    for task_args in attempts:
-        try:
-            subprocess.run(task_args, check=True, capture_output=True, creationflags=creationflags)
-            _log("Scheduled post-update restart at %s" % run_at.strftime("%H:%M:%S"))
-            return True
-        except Exception as e:
-            err = ""
-            if isinstance(e, subprocess.CalledProcessError) and e.stderr:
-                err = e.stderr.decode("utf-8", errors="replace")
-            _log("Failed to schedule post-update restart: %s %s" % (e, err))
-    return False
+    return schedule_restart_helper(
+        stub_exe,
+        delay_seconds=delay_seconds,
+        run_as_user=user,
+        log_fn=_log,
+    )
 
 
 def _launch_via_restart_helper(stub_exe, app_exe, db_path=None, delay_seconds=2) -> bool:

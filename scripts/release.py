@@ -88,6 +88,7 @@ def build_executable() -> None:
         "--hidden-import=PIL.Image",
         "--hidden-import=sqlite3",
         "--hidden-import=database_backup",
+        "--hidden-import=restart_schedule",
         "--collect-all", "reportlab",
         "--collect-all", "PyQt5",
         "main.py",
@@ -106,6 +107,7 @@ def build_executable() -> None:
         "--name=CalibrationTrackerUpdater",
         "--onefile", "--noconsole",
         "--hidden-import=requests",
+        "--hidden-import=restart_schedule",
         "update_app.py",
     ]
     try:
